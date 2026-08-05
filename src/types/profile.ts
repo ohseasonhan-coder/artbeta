@@ -1,0 +1,70 @@
+export type SourceType = "pdf" | "questionnaire" | "unsure";
+export type ReviewStatus = "approved" | "edited" | "excluded" | "needs_review";
+
+export interface Career {
+  id: string;
+  year: string;
+  title: string;
+  organization: string;
+}
+
+export interface ExtractedItem {
+  id: string;
+  type: "artist_name" | "introduction" | "career" | "contact" | "social_link" | "region";
+  label: string;
+  value: string;
+  confidence: number;
+  status: ReviewStatus;
+}
+
+export interface ProfileData {
+  source: SourceType | null;
+  artistName: string;
+  artistType: "개인" | "단체";
+  primaryField: string;
+  secondaryField: string;
+  region: string;
+  members: string;
+  contact: string;
+  videoUrl: string;
+  careers: Career[];
+  strengths: string[];
+  experiences: string[];
+  impressions: string[];
+  tone: string;
+  purpose: string;
+  pageCount: number;
+  templateKey: string;
+  introduction: string;
+  tagline: string;
+  generatedStrengths: string[];
+  representativeImage?: string;
+  performanceImages: string[];
+  extractedItems: ExtractedItem[];
+}
+
+export const initialProfile: ProfileData = {
+  source: null,
+  artistName: "",
+  artistType: "개인",
+  primaryField: "",
+  secondaryField: "",
+  region: "",
+  members: "",
+  contact: "",
+  videoUrl: "",
+  careers: [{ id: "career-1", year: "", title: "", organization: "" }],
+  strengths: [],
+  experiences: [],
+  impressions: [],
+  tone: "전문적이고 명료하게",
+  purpose: "공공기관 제안",
+  pageCount: 6,
+  templateKey: "modern_navy_01",
+  introduction: "",
+  tagline: "",
+  generatedStrengths: [],
+  performanceImages: [],
+  extractedItems: [],
+};
+
