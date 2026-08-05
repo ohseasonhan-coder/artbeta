@@ -4,5 +4,5 @@ out
 .env*
 !.env.example
 *.log
+*.traineddata
 .DS_Store
-

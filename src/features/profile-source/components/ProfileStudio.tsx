@@ -10,6 +10,7 @@ import { initialProfile, ProfileData, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
 import { downloadPptx } from "@/features/profile-export/pptx/generate-pptx";
+import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 
 const fields = ["보컬", "연주", "국악", "무용", "퍼포먼스", "마술", "진행·MC", "복합예술", "전통예술", "기타"];
 const strengths = ["전문적인 실력", "관객과의 소통", "밝고 즐거운 분위기", "감성적인 분위기", "입장하고 화려한 무대", "전통과 현대의 조화", "가족 모두가 즐길 수 있음", "교육적 요소", "독특한 콘셉트"];
@@ -33,14 +34,13 @@ export default function ProfileStudio() {
   const template = useMemo(() => getTemplate(profile.templateKey), [profile.templateKey]);
 
   useEffect(() => {
-    const saved = localStorage.getItem("artfolio-draft");
-    if (saved) {
-      try { setProfile({ ...initialProfile, ...JSON.parse(saved) }); } catch { /* ignore invalid local data */ }
-    }
+    void loadProfileDraft()
+      .then((saved) => { if (saved) setProfile({ ...initialProfile, ...saved }); })
+      .catch(() => { /* 새 초안으로 계속 진행 */ });
   }, []);
 
   useEffect(() => {
-    if (profile.source) localStorage.setItem("artfolio-draft", JSON.stringify(profile));
+    if (profile.source) void saveProfileDraft(profile).catch(() => setNotice("초안 저장 공간이 부족합니다. 불필요한 이미지를 줄여주세요."));
   }, [profile]);
 
   const update = <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => setProfile((current) => ({ ...current, [key]: value }));
@@ -62,9 +62,16 @@ export default function ProfileStudio() {
       const response = await fetch("/api/pdf/extract", { method: "POST", body });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      update("extractedItems", data.items);
       const name = data.items.find((item: { type: string }) => item.type === "artist_name")?.value;
-      if (name) update("artistName", name);
+      setProfile((current) => ({
+        ...current,
+        artistName: name || current.artistName,
+        extractedItems: data.items,
+        pdfPageAssets: data.pages || [],
+      }));
+      setNotice(data.ocrPageCount > 0
+        ? `이미지형 ${data.ocrPageCount}개 페이지를 OCR로 읽고, 전체 페이지를 이미지 자산으로 준비했어요.`
+        : "전체 페이지의 텍스트와 이미지 자산을 분석했어요.");
       setPdfProgress(100);
       setTimeout(() => setStep(2), 450);
     } catch (error) {
@@ -99,7 +106,7 @@ export default function ProfileStudio() {
   };
 
   const resetDraft = () => {
-    localStorage.removeItem("artfolio-draft"); setProfile(initialProfile); setStep(0); setPdfName(""); setNotice("");
+    void clearProfileDraft(); setProfile(initialProfile); setStep(0); setPdfName(""); setNotice("");
   };
 
   const canContinue = step === 2 ? Boolean(profile.artistName && profile.primaryField) : step === 3 ? Boolean(profile.introduction) : true;
@@ -179,6 +186,7 @@ function UnsureStep({ value, setValue, onContinue }: { value: string; setValue: 
 function InformationStep({ profile, update, setProfile }: { profile: ProfileData; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; setProfile: React.Dispatch<React.SetStateAction<ProfileData>> }) {
   const extracted = profile.extractedItems;
   return <section className="stage form-stage"><div className="section-heading"><span>02 · 프로필 정보</span><h1>{extracted.length ? "추출된 내용을 확인해 주세요" : "예술인에 대해 알려주세요"}</h1><p>{extracted.length ? "PDF에서 찾은 정보입니다. 수정하거나 제외한 뒤 프로필에 반영할 수 있어요." : "긴 글 대신 꼭 필요한 정보만 입력하면 됩니다."}</p></div>
+    {profile.pdfPageAssets.length > 0 && <div className="form-card pdf-assets-card"><div className="card-heading"><div><h2>PDF 이미지 자산</h2><p>스캔본을 포함한 모든 페이지를 이미지로 보존했습니다. 프로필에 재사용할 페이지를 선택하세요.</p></div><span>{profile.pdfPageAssets.filter((asset) => asset.selected).length}개 선택</span></div><div className="pdf-page-grid">{profile.pdfPageAssets.map((asset) => <article className={asset.selected ? "selected" : ""} key={asset.pageNumber}><button className="pdf-page-preview" onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber === asset.pageNumber ? { ...page, selected: !page.selected } : page) }))}><img src={asset.previewDataUrl} alt={`PDF ${asset.pageNumber}페이지`} /><span>{asset.selected ? <Check size={14} /> : <Plus size={14} />}</span></button><div><strong>{asset.pageNumber}페이지</strong><small className={asset.textSource}>{asset.textSource === "ocr" ? `OCR ${Math.round(asset.confidence * 100)}%` : asset.textSource === "embedded" ? "텍스트 포함" : "이미지 자산"}</small></div></article>)}</div></div>}
     {extracted.length > 0 && <div className="review-panel"><div className="review-title"><h2>PDF 분석 결과</h2><span>{extracted.length}개 항목</span></div>{extracted.map((item) => <div className="review-item" key={item.id}><div className={`confidence ${item.confidence < .7 ? "low" : ""}`}>{Math.round(item.confidence * 100)}%</div><label><span>{item.label}</span><textarea value={item.value} disabled={item.status === "excluded"} onChange={(event) => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, value: event.target.value, status: "edited" } : target) }))} /></label><button className={item.status === "excluded" ? "excluded" : ""} onClick={() => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, status: target.status === "excluded" ? "approved" : "excluded" } : target) }))}>{item.status === "excluded" ? "복원" : "제외"}</button></div>)}</div>}
     <div className="form-card"><h2>기본 정보</h2><div className="form-grid"><label><span>활동명 *</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아름 / 아트밴드" /></label><label><span>활동 형태 *</span><div className="segmented"><button className={profile.artistType === "개인" ? "selected" : ""} onClick={() => update("artistType", "개인")}>개인</button><button className={profile.artistType === "단체" ? "selected" : ""} onClick={() => update("artistType", "단체")}>단체</button></div></label><label><span>주 활동 분야 *</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>주요 활동 지역</span><input value={profile.region} onChange={(event) => update("region", event.target.value)} placeholder="예: 서울·경기 / 전국" /></label><label><span>연락 방법</span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><label><span>대표 영상 링크</span><input value={profile.videoUrl} onChange={(event) => update("videoUrl", event.target.value)} placeholder="https://" /></label></div></div>
     <div className="form-card"><div className="card-heading"><div><h2>주요 경력</h2><p>최대 5개까지 핵심 활동을 적어주세요.</p></div><button onClick={() => profile.careers.length < 5 && update("careers", [...profile.careers, { id: crypto.randomUUID(), year: "", title: "", organization: "" }])}><Plus size={16} /> 경력 추가</button></div>{profile.careers.map((career) => <div className="career-row" key={career.id}><input value={career.year} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, year: event.target.value } : item))} placeholder="연도" /><input value={career.title} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, title: event.target.value } : item))} placeholder="공연·활동명" /><input value={career.organization} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, organization: event.target.value } : item))} placeholder="기관·장소" /><button aria-label="경력 삭제" onClick={() => update("careers", profile.careers.filter((item) => item.id !== career.id))}><Trash2 size={16} /></button></div>)}</div>
@@ -204,6 +212,7 @@ function ContentStep({ profile, update, busy, generate, notice }: { profile: Pro
 
 function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; uploadImage: (event: ChangeEvent<HTMLInputElement>, representative?: boolean) => void }) {
   return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>대표 사진과 프로필 분위기를 결정하면 실제 PPT와 같은 구성으로 미리보기를 만듭니다.</p></div>
+    {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF에서 선택한 자산</h2><p>원본 페이지 이미지를 대표 사진이나 공연 자료로 가져올 수 있어요.</p></div></div><div className="selected-pdf-assets">{profile.pdfPageAssets.filter((asset) => asset.selected).map((asset) => <article key={asset.pageNumber}><img src={asset.previewDataUrl} alt={`선택한 PDF ${asset.pageNumber}페이지`} /><strong>{asset.pageNumber}페이지</strong><div><button onClick={() => update("representativeImage", asset.previewDataUrl)}>대표 이미지</button><button onClick={() => !profile.performanceImages.includes(asset.previewDataUrl) && update("performanceImages", [...profile.performanceImages, asset.previewDataUrl].slice(0, FILE_LIMITS.maxPerformanceImages))}>공연 자료 추가</button></div></article>)}</div></div>}
     <div className="form-card"><div className="card-heading"><div><h2>대표 사진</h2><p>표지와 소개 페이지에 사용할 사진입니다.</p></div></div><div className="media-grid"><label className="image-upload">{profile.representativeImage ? <img src={profile.representativeImage} alt="대표 사진" /> : <><ImagePlus /><strong>대표 사진 올리기</strong><small>JPG, PNG · 최대 12MB</small></>}<input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} /></label><div className="photo-tip"><Sparkles /><strong>좋은 대표 사진은 이렇게 골라보세요</strong><p>인물이 선명하고 위아래 여백이 있는 세로 사진이 여러 레이아웃에 잘 어울립니다.</p></div></div></div>
     <div className="form-card"><div className="card-heading"><div><h2>공연 사진</h2><p>최대 8장까지 추가할 수 있어요.</p></div><label className="mini-upload"><Plus size={16} /> 사진 추가<input type="file" accept="image/*" multiple onChange={(event) => uploadImage(event)} /></label></div>{profile.performanceImages.length ? <div className="thumb-row">{profile.performanceImages.map((image, index) => <div key={index}><img src={image} alt={`공연 사진 ${index + 1}`} /><button onClick={() => update("performanceImages", profile.performanceImages.filter((_, target) => target !== index))}><X size={13} /></button></div>)}</div> : <div className="empty-media">공연 사진을 추가하면 갤러리 페이지에 반영됩니다.</div>}</div>
     <div className="form-card"><div className="card-heading"><div><h2>디자인 템플릿</h2><p>활동 분야와 제출 목적에 어울리는 디자인을 골라보세요.</p></div></div><div className="template-grid">{designTemplates.map((item) => <button key={item.key} className={`template-card ${profile.templateKey === item.key ? "selected" : ""}`} onClick={() => update("templateKey", item.key)}><div className="template-art" style={{ background: item.palette.background, color: item.palette.text }}><span style={{ color: item.palette.accent }}>ARTIST</span><strong>PORT<br />FOLIO</strong><i style={{ background: item.palette.accent }} /></div><div><strong>{item.name}</strong><small>{item.description}</small></div>{profile.templateKey === item.key && <span className="template-check"><Check /></span>}</button>)}</div></div>

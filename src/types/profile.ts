@@ -17,6 +17,15 @@ export interface ExtractedItem {
   status: ReviewStatus;
 }
 
+export interface PdfPageAsset {
+  pageNumber: number;
+  previewDataUrl: string;
+  text: string;
+  textSource: "embedded" | "ocr" | "none";
+  confidence: number;
+  selected: boolean;
+}
+
 export interface ProfileData {
   source: SourceType | null;
   artistName: string;
@@ -41,6 +50,7 @@ export interface ProfileData {
   representativeImage?: string;
   performanceImages: string[];
   extractedItems: ExtractedItem[];
+  pdfPageAssets: PdfPageAsset[];
 }
 
 export const initialProfile: ProfileData = {
@@ -66,5 +76,5 @@ export const initialProfile: ProfileData = {
   generatedStrengths: [],
   performanceImages: [],
   extractedItems: [],
+  pdfPageAssets: [],
 };
-
