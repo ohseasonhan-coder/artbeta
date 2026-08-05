@@ -38,7 +38,25 @@ interface AiExtractionResponse {
     introduction: string;
     tagline: string;
     strengths: string[];
+    facts: Array<{
+      category: "career" | "performance" | "award" | "media";
+      date: string;
+      title: string;
+      organization: string;
+      location: string;
+      description: string;
+      pageNumber: number;
+      confidence: number;
+    }>;
   };
+  provider: "gemini" | "openai";
+  model: string;
+}
+
+interface AiStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
 }
 
 const fields = ["보컬", "연주", "국악", "무용", "퍼포먼스", "마술", "진행·MC", "복합예술", "전통예술", "기타"];
@@ -78,12 +96,20 @@ export default function ProfileStudio() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [unsureChoice, setUnsureChoice] = useState("");
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ configured: false, provider: "확인 중", model: "" });
   const template = useMemo(() => getTemplate(profile.templateKey), [profile.templateKey]);
 
   useEffect(() => {
     void loadProfileDraft()
       .then((saved) => { if (saved) setProfile({ ...initialProfile, ...saved }); })
       .catch(() => { /* 새 초안으로 계속 진행 */ });
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/ai/status")
+      .then((response) => response.json())
+      .then((status: AiStatus) => setAiStatus(status))
+      .catch(() => setAiStatus({ configured: false, provider: "기본 OCR", model: "로컬 분석" }));
   }, []);
 
   useEffect(() => {
@@ -134,28 +160,38 @@ export default function ProfileStudio() {
       let finalItems = data.items;
       let aiProfile: AiExtractionResponse["profile"] | undefined;
       let aiMode = false;
+      let aiProvider = "";
+      let aiModel = "";
       setPdfProgress(90);
       setNotice("AI가 PDF 이미지와 원문을 함께 읽고 연혁·공연·수상을 정리하고 있어요.");
       try {
+        const aiBody = new FormData();
+        aiBody.append("file", file);
+        aiBody.append("text", data.text || data.pages.map((page) => `[${page.pageNumber}페이지]\n${page.text}`).join("\n\n"));
         const response = await fetch("/api/ai/extract-profile", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: data.text || data.pages.map((page) => `[${page.pageNumber}페이지]\n${page.text}`).join("\n\n"),
-            pages: data.pages.slice(0, 10),
-          }),
+          body: aiBody,
         });
         const result = await response.json().catch(() => ({})) as Partial<AiExtractionResponse> & { code?: string };
         if (response.ok && result.items && result.profile) {
           finalItems = result.items;
           aiProfile = result.profile;
           aiMode = true;
+          aiProvider = result.provider === "gemini" ? "Gemini" : "OpenAI";
+          aiModel = result.model || "";
         }
       } catch {
         // AI 호출이 실패해도 OCR·규칙 기반 결과로 계속 진행합니다.
       }
       const name = aiProfile?.artistName || finalItems.find((item) => item.type === "artist_name")?.value;
-      const careers = itemsToCareers(finalItems);
+      const careers = aiProfile?.facts?.length
+        ? aiProfile.facts.map((fact) => ({
+            id: crypto.randomUUID(),
+            year: fact.date,
+            title: fact.title || fact.description,
+            organization: [fact.organization, fact.location, fact.pageNumber ? `${fact.pageNumber}p` : ""].filter(Boolean).join(" · "),
+          }))
+        : itemsToCareers(finalItems);
       setProfile((current) => ({
         ...current,
         artistName: name || current.artistName,
@@ -174,7 +210,7 @@ export default function ProfileStudio() {
         pdfPageAssets: data.pages || [],
       }));
       setNotice(aiMode
-        ? `AI 정밀 분석 완료: 연혁을 포함해 ${finalItems.length}개 항목을 찾았어요. 원문과 대조해 승인해 주세요.`
+        ? `${aiProvider} · ${aiModel} 원본 PDF 정밀 분석 완료: 연혁을 포함해 ${finalItems.length}개 항목을 찾았어요. 원문과 대조해 승인해 주세요.`
         : data.warnings?.length
         ? `PDF를 부분 분석했습니다. ${data.warnings[0]}`
         : data.analysisMode === "browser"
@@ -240,7 +276,7 @@ export default function ProfileStudio() {
       )}
 
       {step === 0 && <SourceStep onSelect={selectSource} />}
-      {step === 1 && profile.source === "pdf" && <PdfStep name={pdfName} progress={pdfProgress} busy={busy} notice={notice} onUpload={uploadPdf} />}
+      {step === 1 && profile.source === "pdf" && <PdfStep name={pdfName} progress={pdfProgress} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadPdf} />}
       {step === 1 && profile.source === "unsure" && <UnsureStep value={unsureChoice} setValue={setUnsureChoice} onContinue={() => selectSource(["PDF 프로필", "한글·워드 이력서", "공연 포스터"].includes(unsureChoice) ? "pdf" : "questionnaire")} />}
       {step === 2 && <InformationStep profile={profile} update={update} setProfile={setProfile} notice={notice} />}
       {step === 3 && <ContentStep profile={profile} update={update} busy={busy} generate={generateCopy} notice={notice} />}
@@ -271,10 +307,11 @@ function SourceStep({ onSelect }: { onSelect: (source: SourceType) => void }) {
   </section>;
 }
 
-function PdfStep({ name, progress, busy, notice, onUpload }: { name: string; progress: number; busy: boolean; notice: string; onUpload: (file?: File) => void }) {
+function PdfStep({ name, progress, busy, notice, aiStatus, onUpload }: { name: string; progress: number; busy: boolean; notice: string; aiStatus: AiStatus; onUpload: (file?: File) => void }) {
   const prevent = (event: DragEvent) => { event.preventDefault(); event.stopPropagation(); };
   return <section className="stage narrow">
     <div className="section-heading"><span>01 · AI 자료 분석</span><h1>기존 PDF 프로필을 올려주세요</h1><p>텍스트형·이미지형 PDF를 함께 읽고 연혁, 공연, 수상, 연락처와 이미지 자산을 정리합니다. 사용하기 전 직접 확인할 수 있어요.</p></div>
+    <div className={`notice ${aiStatus.configured ? "success" : "warning"}`}>{aiStatus.configured ? `AI 연결됨 · ${aiStatus.provider} · ${aiStatus.model}` : "AI 미연결 · 현재는 OCR 기본 분석만 사용합니다. 배포 환경의 API 키를 확인해 주세요."}</div>
     <label className={`dropzone ${busy ? "loading" : ""}`} onDragEnter={prevent} onDragOver={prevent} onDrop={(event) => { prevent(event); onUpload(event.dataTransfer.files[0]); }}>
       <input type="file" accept="application/pdf" onChange={(event) => onUpload(event.target.files?.[0])} />
       <div className="drop-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</div>

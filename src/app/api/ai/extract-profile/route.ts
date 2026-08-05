@@ -44,8 +44,9 @@ function buildPrompt(pageText: string) {
   return `문화예술인 프로필 PDF를 정밀하게 구조화하세요. 다음 규칙을 반드시 지키세요.\n\n- 문서에 실제로 있는 사실만 추출하고 추측하지 않습니다. 모르면 빈 문자열/빈 배열로 둡니다.\n- 연혁, 주요 활동, 공연, 전시, 교육, 수상·선정, 방송·언론에 있는 날짜 항목은 짧아 보여도 빠짐없이 facts에 한 건씩 담습니다.\n- 날짜·행사명·기관명·장소를 합치거나 생략하지 말고 원문의 순서와 표현을 보존합니다.\n- facts.category를 career, performance, award, media 중 가장 가까운 것으로 분류합니다.\n- 각 사실의 근거 페이지를 알면 pageNumber에 기록하고, 모르면 0으로 둡니다.\n- 소개문과 태그라인은 원문 사실만 요약해 한국어로 작성합니다.\n- 이미지 페이지는 OCR 결과가 부정확할 수 있으므로 화면에 보이는 글자를 직접 교차 확인합니다.\n\nPDF 추출 원문:\n${pageText}`;
 }
 
-async function analyzeWithGemini(prompt: string, pages: PageInput[]): Promise<Extraction> {
+async function analyzeWithGemini(prompt: string, pages: PageInput[], pdfBase64?: string): Promise<Extraction> {
   const parts: Part[] = [{ text: prompt }];
+  if (pdfBase64) parts.push({ inlineData: { mimeType: "application/pdf", data: pdfBase64 } });
   pages.forEach((page) => {
     const match = page.previewDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
     if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
@@ -57,6 +58,8 @@ async function analyzeWithGemini(prompt: string, pages: PageInput[]): Promise<Ex
     config: {
       responseMimeType: "application/json",
       responseJsonSchema: z.toJSONSchema(extractionSchema),
+      temperature: 0.1,
+      maxOutputTokens: 32768,
     },
   });
   return extractionSchema.parse(JSON.parse(response.text || "{}"));
@@ -102,19 +105,33 @@ export async function POST(request: Request) {
   }
 
   try {
-    const body = (await request.json()) as { text?: string; pages?: PageInput[] };
-    const pages = (body.pages ?? []).slice(0, 10);
-    if (!body.text?.trim() && !pages.length) {
+    let text = "";
+    let pages: PageInput[] = [];
+    let pdfBase64: string | undefined;
+    if (request.headers.get("content-type")?.includes("multipart/form-data")) {
+      const formData = await request.formData();
+      text = String(formData.get("text") ?? "");
+      const file = formData.get("file");
+      if (file instanceof File && file.type === "application/pdf") {
+        if (file.size > 30 * 1024 * 1024) return NextResponse.json({ error: "PDF는 최대 30MB까지 분석할 수 있습니다." }, { status: 413 });
+        pdfBase64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+      }
+    } else {
+      const body = (await request.json()) as { text?: string; pages?: PageInput[] };
+      text = body.text ?? "";
+      pages = (body.pages ?? []).slice(0, 10);
+    }
+    if (!text.trim() && !pages.length && !pdfBase64) {
       return NextResponse.json({ error: "분석할 PDF 내용이 없습니다." }, { status: 400 });
     }
 
-    const pageText = (body.text ?? pages.map((page) => `[${page.pageNumber}페이지]\n${page.text}`).join("\n\n")).slice(0, 180_000);
+    const pageText = (text || pages.map((page) => `[${page.pageNumber}페이지]\n${page.text}`).join("\n\n")).slice(0, 180_000);
     const prompt = buildPrompt(pageText);
     let profile: Extraction;
     let provider: "gemini" | "openai";
     if (process.env.GEMINI_API_KEY) {
       try {
-        profile = await analyzeWithGemini(prompt, pages);
+        profile = await analyzeWithGemini(prompt, pages, pdfBase64);
         provider = "gemini";
       } catch (geminiError) {
         console.error("Gemini extraction failed", geminiError);
