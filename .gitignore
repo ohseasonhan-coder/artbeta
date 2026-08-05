@@ -5,4 +5,5 @@ out
 !.env.example
 *.log
 *.traineddata
+*.tsbuildinfo
 .DS_Store
