@@ -6,4 +6,5 @@ out
 *.log
 *.traineddata
 *.tsbuildinfo
+public/pdf.worker.min.mjs
 .DS_Store

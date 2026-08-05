@@ -6,11 +6,21 @@ import {
   ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, CircleHelp, Download, FileText,
   ImagePlus, LayoutTemplate, Loader2, Menu, PenLine, Plus, RotateCcw, Sparkles, Trash2, Upload, WandSparkles, X,
 } from "lucide-react";
-import { initialProfile, ProfileData, SourceType } from "@/types/profile";
+import { ExtractedItem, initialProfile, PdfPageAsset, ProfileData, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
 import { downloadPptx } from "@/features/profile-export/pptx/generate-pptx";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
+import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
+import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
+
+interface PdfUploadResponse {
+  items: ExtractedItem[];
+  pages: PdfPageAsset[];
+  ocrPageCount: number;
+  warnings: string[];
+  analysisMode?: "server" | "browser";
+}
 
 const fields = ["보컬", "연주", "국악", "무용", "퍼포먼스", "마술", "진행·MC", "복합예술", "전통예술", "기타"];
 const strengths = ["전문적인 실력", "관객과의 소통", "밝고 즐거운 분위기", "감성적인 분위기", "입장하고 화려한 무대", "전통과 현대의 조화", "가족 모두가 즐길 수 있음", "교육적 요소", "독특한 콘셉트"];
@@ -53,15 +63,36 @@ export default function ProfileStudio() {
 
   const uploadPdf = async (file?: File) => {
     if (!file) return;
-    if (file.type !== "application/pdf") return setNotice("PDF 파일만 업로드할 수 있어요.");
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return setNotice("PDF 파일만 업로드할 수 있어요.");
     if (file.size > FILE_LIMITS.pdf) return setNotice("PDF는 최대 30MB까지 업로드할 수 있어요.");
     setBusy(true); setPdfName(file.name); setPdfProgress(18); setNotice("");
     const timer = window.setInterval(() => setPdfProgress((value) => Math.min(value + 12, 86)), 220);
     try {
-      const body = new FormData(); body.append("file", file);
-      const response = await fetch("/api/pdf/extract", { method: "POST", body });
-      const data = await response.json().catch(() => ({ error: "서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요." }));
-      if (!response.ok) throw new Error(data.error);
+      let data: PdfUploadResponse;
+      let serverErrorMessage = "";
+      try {
+        const body = new FormData(); body.append("file", file);
+        const response = await fetch(process.env.NEXT_PUBLIC_PDF_ANALYSIS_ENDPOINT || "/api/pdf/extract", { method: "POST", body });
+        const serverData = await response.json().catch(() => ({ error: "서버 응답을 읽지 못했습니다." }));
+        if (!response.ok) throw new Error(serverData.error);
+        data = { ...serverData, analysisMode: "server" } as PdfUploadResponse;
+      } catch (serverError) {
+        serverErrorMessage = serverError instanceof Error ? serverError.message : "서버 분석에 실패했습니다.";
+        clearInterval(timer);
+        setNotice("서버 분석이 어려워 브라우저에서 안전하게 다시 분석하고 있어요.");
+        setPdfProgress(35);
+        try {
+          const browserData = await analyzePdfInBrowser(file, (progress) => setPdfProgress(progress));
+          data = {
+            ...browserData,
+            items: inferItemsFromText(browserData.combinedText),
+            analysisMode: "browser",
+          };
+        } catch (browserError) {
+          const browserMessage = browserError instanceof Error ? browserError.message : "브라우저 분석도 완료하지 못했습니다.";
+          throw new Error(`${serverErrorMessage} 브라우저 재분석 실패: ${browserMessage}`);
+        }
+      }
       const name = data.items.find((item: { type: string }) => item.type === "artist_name")?.value;
       setProfile((current) => ({
         ...current,
@@ -71,6 +102,8 @@ export default function ProfileStudio() {
       }));
       setNotice(data.warnings?.length
         ? `PDF를 부분 분석했습니다. ${data.warnings[0]}`
+        : data.analysisMode === "browser"
+          ? "서버 대신 브라우저에서 PDF 분석을 완료했어요. 페이지 이미지와 OCR 결과를 확인해 주세요."
         : data.ocrPageCount > 0
           ? `이미지형 ${data.ocrPageCount}개 페이지를 OCR로 읽고, 전체 페이지를 이미지 자산으로 준비했어요.`
           : "전체 페이지의 텍스트와 이미지 자산을 분석했어요.");
