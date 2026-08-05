@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { GoogleGenAI, type Part } from "@google/genai";
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { ResponseInputContent } from "openai/resources/responses/responses";
@@ -37,6 +38,47 @@ const extractionSchema = z.object({
 });
 
 type PageInput = Pick<PdfPageAsset, "pageNumber" | "previewDataUrl" | "text" | "textSource">;
+type Extraction = z.infer<typeof extractionSchema>;
+
+function buildPrompt(pageText: string) {
+  return `문화예술인 프로필 PDF를 정밀하게 구조화하세요. 다음 규칙을 반드시 지키세요.\n\n- 문서에 실제로 있는 사실만 추출하고 추측하지 않습니다. 모르면 빈 문자열/빈 배열로 둡니다.\n- 연혁, 주요 활동, 공연, 전시, 교육, 수상·선정, 방송·언론에 있는 날짜 항목은 짧아 보여도 빠짐없이 facts에 한 건씩 담습니다.\n- 날짜·행사명·기관명·장소를 합치거나 생략하지 말고 원문의 순서와 표현을 보존합니다.\n- facts.category를 career, performance, award, media 중 가장 가까운 것으로 분류합니다.\n- 각 사실의 근거 페이지를 알면 pageNumber에 기록하고, 모르면 0으로 둡니다.\n- 소개문과 태그라인은 원문 사실만 요약해 한국어로 작성합니다.\n- 이미지 페이지는 OCR 결과가 부정확할 수 있으므로 화면에 보이는 글자를 직접 교차 확인합니다.\n\nPDF 추출 원문:\n${pageText}`;
+}
+
+async function analyzeWithGemini(prompt: string, pages: PageInput[]): Promise<Extraction> {
+  const parts: Part[] = [{ text: prompt }];
+  pages.forEach((page) => {
+    const match = page.previewDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
+    if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+  });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const response = await ai.models.generateContent({
+    model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
+    contents: [{ role: "user", parts }],
+    config: {
+      responseMimeType: "application/json",
+      responseJsonSchema: z.toJSONSchema(extractionSchema),
+    },
+  });
+  return extractionSchema.parse(JSON.parse(response.text || "{}"));
+}
+
+async function analyzeWithOpenAI(prompt: string, pages: PageInput[]): Promise<Extraction> {
+  const content: ResponseInputContent[] = [
+    { type: "input_text", text: prompt },
+    ...pages
+      .filter((page) => page.previewDataUrl.startsWith("data:image/"))
+      .map((page) => ({ type: "input_image" as const, image_url: page.previewDataUrl, detail: "high" as const })),
+  ];
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const response = await client.responses.parse({
+    model: process.env.OPENAI_MODEL || "gpt-5.6-sol",
+    store: false,
+    input: [{ role: "user", content }],
+    text: { format: zodTextFormat(extractionSchema, "artist_profile_extraction") },
+  });
+  if (!response.output_parsed) throw new Error("OpenAI가 구조화된 결과를 반환하지 않았습니다.");
+  return response.output_parsed;
+}
 
 const makeItem = (
   type: ExtractedItem["type"],
@@ -55,8 +97,8 @@ const makeItem = (
 });
 
 export async function POST(request: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: "OPENAI_API_KEY가 설정되지 않았습니다.", code: "AI_NOT_CONFIGURED" }, { status: 503 });
+  if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
+    return NextResponse.json({ error: "AI API 키가 설정되지 않았습니다.", code: "AI_NOT_CONFIGURED" }, { status: 503 });
   }
 
   try {
@@ -67,25 +109,23 @@ export async function POST(request: Request) {
     }
 
     const pageText = (body.text ?? pages.map((page) => `[${page.pageNumber}페이지]\n${page.text}`).join("\n\n")).slice(0, 180_000);
-    const content: ResponseInputContent[] = [
-      {
-        type: "input_text",
-        text: `문화예술인 프로필 PDF를 정밀하게 구조화하세요. 다음 규칙을 반드시 지키세요.\n\n- 문서에 실제로 있는 사실만 추출하고 추측하지 않습니다. 모르면 빈 문자열/빈 배열로 둡니다.\n- 연혁, 주요 활동, 공연, 전시, 교육, 수상·선정, 방송·언론에 있는 날짜 항목은 짧아 보여도 빠짐없이 facts에 한 건씩 담습니다.\n- 날짜·행사명·기관명·장소를 합치거나 생략하지 말고 원문의 순서와 표현을 보존합니다.\n- facts.category를 career, performance, award, media 중 가장 가까운 것으로 분류합니다.\n- 각 사실의 근거 페이지를 알면 pageNumber에 기록하고, 모르면 0으로 둡니다.\n- 소개문과 태그라인은 원문 사실만 요약해 한국어로 작성합니다.\n- 이미지 페이지는 OCR 결과가 부정확할 수 있으므로 화면에 보이는 글자를 직접 교차 확인합니다.\n\nPDF 추출 원문:\n${pageText}`,
-      },
-      ...pages
-        .filter((page) => page.previewDataUrl.startsWith("data:image/"))
-        .map((page) => ({ type: "input_image" as const, image_url: page.previewDataUrl, detail: "high" as const })),
-    ];
-
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const response = await client.responses.parse({
-      model: process.env.OPENAI_MODEL || "gpt-5.6-sol",
-      store: false,
-      input: [{ role: "user", content }],
-      text: { format: zodTextFormat(extractionSchema, "artist_profile_extraction") },
-    });
-    const profile = response.output_parsed;
-    if (!profile) throw new Error("AI가 구조화된 결과를 반환하지 않았습니다.");
+    const prompt = buildPrompt(pageText);
+    let profile: Extraction;
+    let provider: "gemini" | "openai";
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        profile = await analyzeWithGemini(prompt, pages);
+        provider = "gemini";
+      } catch (geminiError) {
+        console.error("Gemini extraction failed", geminiError);
+        if (!process.env.OPENAI_API_KEY) throw geminiError;
+        profile = await analyzeWithOpenAI(prompt, pages);
+        provider = "openai";
+      }
+    } else {
+      profile = await analyzeWithOpenAI(prompt, pages);
+      provider = "openai";
+    }
 
     const items: ExtractedItem[] = [];
     if (profile.artistName) items.push(makeItem("artist_name", "활동명", profile.artistName));
@@ -105,7 +145,8 @@ export async function POST(request: Request) {
       items.push(makeItem(fact.category, labels[fact.category], value, fact.confidence, fact.pageNumber));
     });
 
-    return NextResponse.json({ profile, items, mode: "ai", model: process.env.OPENAI_MODEL || "gpt-5.6-sol" });
+    const model = provider === "gemini" ? process.env.GEMINI_MODEL || "gemini-3.6-flash" : process.env.OPENAI_MODEL || "gpt-5.6-sol";
+    return NextResponse.json({ profile, items, mode: "ai", provider, model });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "AI 정밀 분석을 완료하지 못했습니다. 기본 분석 결과는 계속 사용할 수 있습니다.", code: "AI_EXTRACTION_FAILED" }, { status: 502 });

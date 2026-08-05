@@ -27,9 +27,11 @@ npm run dev
 
 브라우저에서 `http://localhost:3000`을 엽니다. 관리자 화면은 `/admin/design-templates`입니다.
 
-## OpenAI API 연결
+## AI API 연결
 
-1. [OpenAI API 키 페이지](https://platform.openai.com/api-keys)에서 비밀키를 만듭니다. ChatGPT 구독과 API 사용 요금은 별도이므로 API 프로젝트에 결제 수단 또는 크레딧도 설정해야 합니다.
+무료 테스트에는 Gemini API를 우선 사용합니다. Gemini 키가 있으면 Gemini로 분석하고, 없거나 호출에 실패하면 OpenAI 키를 대체 경로로 사용합니다. 둘 다 없거나 실패해도 OCR·규칙 기반 분석은 계속 동작합니다.
+
+1. [Google AI Studio](https://aistudio.google.com/apikey)에서 Gemini API 키를 만듭니다.
 2. 프로젝트 루트에서 환경 파일을 만듭니다.
 
 ```powershell
@@ -40,21 +42,21 @@ notepad .env.local
 3. `.env.local`에 아래 값을 입력합니다. 키에는 절대 `NEXT_PUBLIC_` 접두사를 붙이지 마세요.
 
 ```dotenv
-OPENAI_API_KEY=sk-proj-발급받은_키
-OPENAI_MODEL=gpt-5.6-sol
+GEMINI_API_KEY=발급받은_키
+GEMINI_MODEL=gemini-3.6-flash
 ```
 
 4. 이미 개발 서버가 실행 중이었다면 종료 후 `npm run dev`로 다시 시작합니다.
 
-`gpt-5.6-sol`은 정밀 추출 품질을 우선한 기본값입니다. 속도와 비용의 균형이 중요하면 `OPENAI_MODEL=gpt-5.6-terra`로 변경할 수 있습니다. 키가 없거나 AI 호출이 실패해도 앱은 OCR과 확장된 규칙 기반 분석으로 계속 동작합니다.
+OpenAI를 유료 대체 경로로 함께 사용하려면 같은 파일에 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 추가할 수 있습니다. 키가 없거나 AI 호출이 실패해도 앱은 OCR과 확장된 규칙 기반 분석으로 계속 동작합니다.
 
 ### Vercel 배포 시
 
-Vercel 프로젝트의 **Settings → Environment Variables**에 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 추가한 뒤 다시 배포합니다. 환경변수는 Production, Preview, Development 중 사용할 환경에 각각 적용하세요. 비밀키를 GitHub, 클라이언트 코드, 브라우저 콘솔에 넣으면 안 됩니다.
+Vercel 프로젝트의 **Settings → Environment Variables**에 `GEMINI_API_KEY`와 `GEMINI_MODEL`을 추가한 뒤 다시 배포합니다. 환경변수는 Production, Preview, Development 중 사용할 환경에 각각 적용하세요. 비밀키를 GitHub, 클라이언트 코드, 브라우저 콘솔에 넣으면 안 됩니다.
 
 ### AI 분석 흐름
 
-PDF 업로드 후 앱은 먼저 모든 페이지를 렌더링하고 텍스트 레이어가 부족한 페이지에 한글·영문 OCR을 실행합니다. 그다음 전체 추출 원문과 최대 10개 페이지 이미지를 OpenAI Responses API에 함께 보내고, 구조화된 결과로 연혁·공연·수상·언론을 분류합니다. AI 결과도 자동 확정하지 않으며 사용자가 수정하거나 제외한 뒤 프로필에 반영할 수 있습니다.
+PDF 업로드 후 앱은 먼저 모든 페이지를 렌더링하고 텍스트 레이어가 부족한 페이지에 한글·영문 OCR을 실행합니다. 그다음 전체 추출 원문과 최대 10개 페이지 이미지를 Gemini에 함께 보내고, 구조화된 결과로 연혁·공연·수상·언론을 분류합니다. Gemini가 실패하고 OpenAI 키가 있으면 OpenAI로 자동 재시도합니다. AI 결과도 자동 확정하지 않으며 사용자가 수정하거나 제외한 뒤 프로필에 반영할 수 있습니다.
 
 ## 자산 저장 원칙
 
