@@ -1,76 +1,192 @@
-import { ProfileData } from "@/types/profile";
+import { DeckPlan, DeckSlidePlan, ProfileData } from "@/types/profile";
 import { getTemplate } from "@/features/design-templates/registry/templates";
 
 const hex = (value: string) => value.replace("#", "");
 
-export async function downloadPptx(profile: ProfileData) {
+interface VisualAsset {
+  id: string;
+  kind: "representative" | "performance" | "pdf_page";
+  pageNumber?: number;
+  dataUrl: string;
+}
+
+export interface DeckExportResult {
+  mode: "ai" | "local";
+  provider: string;
+  model: string;
+  slideCount: number;
+}
+
+function collectAssets(profile: ProfileData): VisualAsset[] {
+  const assets: VisualAsset[] = [];
+  if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", dataUrl: profile.representativeImage });
+  profile.performanceImages.forEach((dataUrl, index) => assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }));
+  profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => assets.push({ id: `pdf-page-${page.pageNumber}`, kind: "pdf_page", pageNumber: page.pageNumber, dataUrl: page.previewDataUrl }));
+  return assets;
+}
+
+async function makeThumbnail(dataUrl: string) {
+  return new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, 640 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.72));
+    };
+    image.onerror = () => resolve(dataUrl);
+    image.src = dataUrl;
+  });
+}
+
+function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
+  const slides: DeckSlidePlan[] = [
+    { type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: assets[0] ? [assets[0].id] : [], imagePurpose: "예술인의 첫인상", careerIndexes: [], layout: assets[0] ? "full_bleed" : "editorial" },
+    { type: "about", eyebrow: "IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: profile.introduction, bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean), imageRefs: assets[1] ? [assets[1].id] : [], imagePurpose: "활동 정체성과 분위기", careerIndexes: [], layout: assets[1] ? "split_right" : "editorial" },
+    { type: "strengths", eyebrow: "WHY THIS ARTIST", title: "현장에서 분명해지는 경쟁력", body: "", bullets: (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths).slice(0, 3), imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" },
+  ];
+  if (assets.length > 2) slides.push({ type: "gallery", eyebrow: "ON STAGE", title: "사진으로 확인하는 무대의 밀도", body: "", bullets: [], imageRefs: assets.slice(2, 5).map((asset) => asset.id), imagePurpose: "공연 규모와 현장성", careerIndexes: [], layout: "gallery" });
+  slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: profile.careers.map((_, index) => index).slice(0, 9), layout: "timeline" });
+  slides.push({ type: "contact", eyebrow: "CONTACT", title: "다음 무대를 함께 만들겠습니다", body: [profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n"), bullets: [], imageRefs: assets[5] ? [assets[5].id] : [], imagePurpose: "마지막 인상", careerIndexes: [], layout: assets[5] ? "split_left" : "editorial" });
+  return { narrative: "정체성에서 현장 경쟁력과 검증된 활동을 거쳐 섭외 행동으로 연결", visualDirection: "선명한 타이포그래피와 실제 공연 이미지 중심", slides: slides.slice(0, Math.max(4, Math.min(10, profile.pageCount))) };
+}
+
+async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
+  const thumbnails = await Promise.all(assets.slice(0, 10).map(async (asset) => ({ ...asset, dataUrl: await makeThumbnail(asset.dataUrl) })));
+  const profileFacts = {
+    artistName: profile.artistName,
+    artistType: profile.artistType,
+    primaryField: profile.primaryField,
+    secondaryField: profile.secondaryField,
+    region: profile.region,
+    members: profile.members,
+    contact: profile.contact,
+    videoUrl: profile.videoUrl,
+    careers: profile.careers.map((career, index) => ({ index, ...career })),
+    strengths: profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths,
+    introduction: profile.introduction,
+    tagline: profile.tagline,
+    purpose: profile.purpose,
+    tone: profile.tone,
+    requestedPageCount: profile.pageCount,
+  };
+  const response = await fetch("/api/ai/plan-deck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: profileFacts, assets: thumbnails }) });
+  if (!response.ok) throw new Error("AI PPT 기획을 불러오지 못했습니다.");
+  return response.json() as Promise<{ plan: DeckPlan; mode: "ai"; provider: string; model: string }>;
+}
+
+export async function downloadPptx(profile: ProfileData): Promise<DeckExportResult> {
   const PptxGenJS = (await import("pptxgenjs")).default;
   const pptx = new PptxGenJS();
   const template = getTemplate(profile.templateKey);
   const p = template.palette;
+  const assets = collectAssets(profile);
+  let plan = fallbackPlan(profile, assets);
+  let exportMeta: Omit<DeckExportResult, "slideCount"> = { mode: "local", provider: "기본 기획", model: "로컬" };
+  try {
+    const result = await requestDeckPlan(profile, assets);
+    plan = result.plan;
+    exportMeta = { mode: "ai", provider: result.provider, model: result.model };
+  } catch {
+    // Gemini를 사용할 수 없어도 편집 가능한 PPTX는 생성합니다.
+  }
+
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "Artfolio Studio";
   pptx.subject = `${profile.artistName} 예술인 프로필`;
   pptx.title = `${profile.artistName || "예술인"} Profile`;
   pptx.company = "Artfolio";
-  pptx.theme = {
-    headFontFace: "Aptos Display",
-    bodyFontFace: "Aptos",
-  };
+  pptx.theme = { headFontFace: "Aptos Display", bodyFontFace: "Aptos" };
 
+  const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
+  const usedAssets = new Set<string>();
+  const pickImages = (slidePlan: DeckSlidePlan) => slidePlan.imageRefs
+    .filter((id) => assetMap.has(id) && !usedAssets.has(id))
+    .map((id) => { usedAssets.add(id); return assetMap.get(id)!; });
+  const addImage = (slide: ReturnType<typeof pptx.addSlide>, asset: VisualAsset, x: number, y: number, w: number, h: number, alt: string) => {
+    slide.addImage({ data: asset.dataUrl, x, y, w, h, sizing: { type: "cover", w, h }, altText: alt || `${profile.artistName} 활동 이미지` });
+  };
   const addFooter = (slide: ReturnType<typeof pptx.addSlide>, index: number) => {
-    slide.addText(String(index).padStart(2, "0"), { x: 12.1, y: 7.05, w: 0.55, h: 0.18, fontSize: 7, color: hex(p.muted), margin: 0, align: "right" });
+    slide.addText(`${profile.artistName || "ARTIST"}  ·  ${String(index).padStart(2, "0")}`, { x: 10.3, y: 7.08, w: 2.2, h: 0.18, fontSize: 7, color: hex(p.muted), margin: 0, align: "right" });
+  };
+  const addEyebrow = (slide: ReturnType<typeof pptx.addSlide>, text: string, light = false) => {
+    slide.addText(text || "ARTIST PROFILE", { x: 0.78, y: 0.6, w: 4.8, h: 0.28, fontSize: 10, bold: true, charSpacing: 2.5, color: light ? "FFFFFF" : hex(p.accent), margin: 0 });
   };
 
-  const cover = pptx.addSlide();
-  cover.background = { color: hex(p.background) };
-  cover.addShape(pptx.ShapeType.rect, { x: 0.55, y: 0.55, w: 0.1, h: 6.4, fill: { color: hex(p.accent) }, line: { transparency: 100 } });
-  cover.addText("ARTIST PROFILE", { x: 1.05, y: 0.8, w: 4, h: 0.3, fontSize: 10, bold: true, charSpacing: 3, color: hex(p.accent), margin: 0 });
-  cover.addText(profile.artistName || "ARTIST NAME", { x: 1.02, y: 2.25, w: 10.8, h: 1.05, fontSize: 42, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-  cover.addText(profile.tagline || `${profile.primaryField || "공연예술"}로 만나는 새로운 장면`, { x: 1.05, y: 3.5, w: 8.2, h: 0.75, fontSize: 18, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
-  cover.addText(`${profile.primaryField || "PERFORMING ARTS"} · ${new Date().getFullYear()}`, { x: 1.05, y: 6.55, w: 5.5, h: 0.25, fontSize: 9, color: hex(p.muted), margin: 0 });
+  plan.slides.forEach((slidePlan, slideIndex) => {
+    const slide = pptx.addSlide();
+    const images = pickImages(slidePlan);
+    const primaryImage = images[0];
+    const isCover = slidePlan.type === "cover";
+    slide.background = { color: hex(isCover ? p.background : slideIndex % 2 ? p.surface : p.background) };
 
-  const intro = pptx.addSlide();
-  intro.background = { color: hex(p.surface) };
-  intro.addText("01", { x: 0.7, y: 0.55, w: 0.8, h: 0.5, fontSize: 24, color: hex(p.accent), bold: true, margin: 0 });
-  intro.addText("ABOUT", { x: 1.65, y: 0.65, w: 2.6, h: 0.3, fontSize: 10, charSpacing: 3, color: hex(p.muted), bold: true, margin: 0 });
-  intro.addText(profile.tagline || "예술로 오래 기억될 장면을 만듭니다", { x: 1.65, y: 1.55, w: 9.8, h: 1.2, fontSize: 30, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
-  intro.addText(profile.introduction || "프로필 소개문을 생성하면 이곳에 예술인의 이야기가 표시됩니다.", { x: 1.68, y: 3.15, w: 8.7, h: 1.8, fontSize: 15, breakLine: false, color: hex(p.muted), margin: 0, fit: "shrink", paraSpaceAfter: 10 });
-  addFooter(intro, 2);
+    if (isCover) {
+      if (primaryImage) {
+        addImage(slide, primaryImage, 0, 0, 13.333, 7.5, slidePlan.imagePurpose);
+        slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: "071019", transparency: 38 }, line: { transparency: 100 } });
+      }
+      addEyebrow(slide, slidePlan.eyebrow, Boolean(primaryImage));
+      slide.addText(slidePlan.title || profile.artistName || "ARTIST", { x: 0.78, y: 2.25, w: 11.6, h: 1.25, fontSize: 52, bold: true, color: primaryImage ? "FFFFFF" : hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(slidePlan.body || profile.tagline, { x: 0.82, y: 3.75, w: 8.8, h: 0.85, fontSize: 22, color: primaryImage ? "F1F4F6" : hex(p.muted), margin: 0, fit: "shrink" });
+      slide.addText(`${profile.primaryField} · ${profile.region}`.replace(/^ · | · $/g, ""), { x: 0.82, y: 6.65, w: 6.5, h: 0.25, fontSize: 10, color: primaryImage ? "FFFFFF" : hex(p.muted), margin: 0 });
+      return;
+    }
 
-  const strengths = pptx.addSlide();
-  strengths.background = { color: hex(p.background) };
-  strengths.addText("CORE STRENGTHS", { x: 0.85, y: 0.72, w: 4.4, h: 0.35, fontSize: 11, color: hex(p.accent), bold: true, charSpacing: 2.5, margin: 0 });
-  strengths.addText("무대를 완성하는 세 가지 힘", { x: 0.85, y: 1.32, w: 8.6, h: 0.65, fontSize: 27, bold: true, color: hex(p.text), margin: 0 });
-  const strengthItems = profile.generatedStrengths.length ? profile.generatedStrengths : ["분야의 전문성", "유연한 프로그램 구성", "관객과의 자연스러운 호흡"];
-  strengthItems.slice(0, 3).forEach((item, index) => {
-    const x = 0.85 + index * 4.05;
-    strengths.addShape(pptx.ShapeType.roundRect, { x, y: 2.55, w: 3.55, h: 2.75, rectRadius: 0.08, fill: { color: hex(p.surface) }, line: { color: hex(p.surface) } });
-    strengths.addText(`0${index + 1}`, { x: x + 0.35, y: 2.9, w: 0.6, h: 0.4, fontSize: 13, bold: true, color: hex(p.accent), margin: 0 });
-    strengths.addText(item, { x: x + 0.35, y: 3.7, w: 2.85, h: 0.9, fontSize: 18, bold: true, color: hex(p.text), margin: 0, fit: "shrink", valign: "middle" });
+    if (slidePlan.type === "gallery" && images.length) {
+      addEyebrow(slide, slidePlan.eyebrow);
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.8, h: 0.62, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      const frames = images.length === 1
+        ? [{ x: 0.78, y: 2.05, w: 11.78, h: 4.45 }]
+        : images.length === 2
+          ? [{ x: 0.78, y: 2.05, w: 7.2, h: 4.45 }, { x: 8.18, y: 2.05, w: 4.38, h: 4.45 }]
+          : [{ x: 0.78, y: 2.05, w: 7.2, h: 4.45 }, { x: 8.18, y: 2.05, w: 4.38, h: 2.1 }, { x: 8.18, y: 4.4, w: 4.38, h: 2.1 }];
+      images.slice(0, frames.length).forEach((asset, index) => addImage(slide, asset, frames[index].x, frames[index].y, frames[index].w, frames[index].h, slidePlan.imagePurpose));
+      addFooter(slide, slideIndex + 1);
+      return;
+    }
+
+    if (slidePlan.type === "career") {
+      addEyebrow(slide, slidePlan.eyebrow);
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : profile.careers.map((_, index) => index)).map((index) => profile.careers[index]).filter(Boolean).slice(0, 9);
+      selected.forEach((item, index) => {
+        const y = 2.15 + index * 0.49;
+        slide.addText(item.year || "—", { x: 0.82, y, w: 1.35, h: 0.24, fontSize: 11, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addText(item.title, { x: 2.25, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 14, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+        slide.addText(item.organization, { x: 9.1, y, w: 3.25, h: 0.24, fontSize: 9, color: hex(p.muted), margin: 0, align: "right", fit: "shrink" });
+        slide.addShape(pptx.ShapeType.line, { x: 2.25, y: y + 0.34, w: 10.1, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
+      });
+      addFooter(slide, slideIndex + 1);
+      return;
+    }
+
+    if (slidePlan.type === "strengths") {
+      addEyebrow(slide, slidePlan.eyebrow);
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.75, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      const bullets = slidePlan.bullets.length ? slidePlan.bullets : profile.generatedStrengths;
+      bullets.slice(0, 3).forEach((item, index) => {
+        const x = 0.82 + index * 4.08;
+        slide.addText(`0${index + 1}`, { x, y: 2.45, w: 0.7, h: 0.45, fontSize: 16, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addShape(pptx.ShapeType.line, { x, y: 3.02, w: 3.45, h: 0, line: { color: hex(p.accent), width: 1.2 } });
+        slide.addText(item, { x, y: 3.42, w: 3.45, h: 1.45, fontSize: 24, bold: true, color: hex(p.text), margin: 0, fit: "shrink", valign: "middle" });
+      });
+      addFooter(slide, slideIndex + 1);
+      return;
+    }
+
+    const imageOnLeft = slidePlan.layout === "split_left";
+    if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0 : 7.55, 0, 5.78, 7.5, slidePlan.imagePurpose);
+    const textX = primaryImage && imageOnLeft ? 6.55 : 0.78;
+    const textW = primaryImage ? 5.9 : 11.7;
+    addEyebrow(slide, slidePlan.eyebrow);
+    slide.addText(slidePlan.title, { x: textX, y: 1.35, w: textW, h: 1.3, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+    slide.addText(slidePlan.body || (slidePlan.type === "about" ? profile.introduction : [profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n")), { x: textX, y: 3.1, w: primaryImage ? 5.55 : 8.8, h: 1.75, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink", breakLine: false, paraSpaceAfter: 8 });
+    if (slidePlan.bullets.length) slide.addText(slidePlan.bullets.map((text) => ({ text, options: { bullet: { indent: 18 }, breakLine: true } })), { x: textX, y: 5.15, w: primaryImage ? 5.5 : 8.8, h: 1.15, fontSize: 15, color: hex(p.text), margin: 0, breakLine: false });
+    addFooter(slide, slideIndex + 1);
   });
-  addFooter(strengths, 3);
-
-  const career = pptx.addSlide();
-  career.background = { color: hex(p.surface) };
-  career.addText("SELECTED WORK", { x: 0.85, y: 0.7, w: 4.2, h: 0.35, fontSize: 11, color: hex(p.accent), bold: true, charSpacing: 2.5, margin: 0 });
-  career.addText("주요 활동", { x: 0.85, y: 1.3, w: 4.2, h: 0.65, fontSize: 28, bold: true, color: hex(p.text), margin: 0 });
-  const careers = profile.careers.filter((item) => item.title.trim()).slice(0, 7);
-  (careers.length ? careers : [{ id: "empty", year: "—", title: "주요 경력을 입력해 주세요", organization: "" }]).forEach((item, index) => {
-    const y = 2.35 + index * 0.58;
-    career.addText(item.year || "—", { x: 0.9, y, w: 1.1, h: 0.25, fontSize: 10, bold: true, color: hex(p.accent), margin: 0 });
-    career.addText(item.title, { x: 2.25, y: y - 0.03, w: 6.6, h: 0.3, fontSize: 13, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
-    career.addText(item.organization, { x: 9.05, y, w: 2.8, h: 0.25, fontSize: 9, color: hex(p.muted), margin: 0, align: "right", fit: "shrink" });
-    career.addShape(pptx.ShapeType.line, { x: 2.25, y: y + 0.37, w: 9.6, h: 0, line: { color: hex(p.muted), transparency: 75, width: 0.6 } });
-  });
-  addFooter(career, 4);
-
-  const contact = pptx.addSlide();
-  contact.background = { color: hex(p.background) };
-  contact.addText("LET'S CREATE\nA NEW SCENE.", { x: 0.9, y: 1.2, w: 8.7, h: 2.2, fontSize: 39, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-  contact.addText(profile.artistName || "ARTIST", { x: 0.95, y: 4.65, w: 4, h: 0.4, fontSize: 15, bold: true, color: hex(p.accent), margin: 0 });
-  contact.addText([profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n") || "연락 정보를 입력해 주세요", { x: 0.95, y: 5.25, w: 6.5, h: 0.9, fontSize: 11, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
-  addFooter(contact, 5);
 
   await pptx.writeFile({ fileName: `${profile.artistName || "artist"}_profile.pptx` });
+  return { ...exportMeta, slideCount: plan.slides.length };
 }

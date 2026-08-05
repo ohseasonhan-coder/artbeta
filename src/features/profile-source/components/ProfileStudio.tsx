@@ -251,6 +251,21 @@ export default function ProfileStudio() {
     finally { setBusy(false); }
   };
 
+  const exportDeck = async () => {
+    setBusy(true);
+    setNotice("Gemini가 사진의 역할과 페이지 흐름을 설계하고 PPTX를 제작하고 있어요.");
+    try {
+      const result = await downloadPptx(profile);
+      setNotice(result.mode === "ai"
+        ? `${result.provider} · ${result.model}이 사진을 선별하고 ${result.slideCount}페이지 PPTX를 구성했어요.`
+        : `AI 기획을 사용할 수 없어 기본 구성으로 ${result.slideCount}페이지 PPTX를 만들었어요.`);
+    } catch {
+      setNotice("PPTX 제작 중 문제가 생겼습니다. 이미지 용량을 줄이거나 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const resetDraft = () => {
     void clearProfileDraft(); setProfile(initialProfile); setStep(0); setPdfName(""); setNotice("");
   };
@@ -281,7 +296,7 @@ export default function ProfileStudio() {
       {step === 2 && <InformationStep profile={profile} update={update} setProfile={setProfile} notice={notice} />}
       {step === 3 && <ContentStep profile={profile} update={update} busy={busy} generate={generateCopy} notice={notice} />}
       {step === 4 && <DesignStep profile={profile} update={update} uploadImage={uploadImage} />}
-      {step === 5 && <PreviewStep profile={profile} template={template} update={update} onDownload={() => downloadPptx(profile)} />}
+      {step === 5 && <PreviewStep profile={profile} template={template} update={update} busy={busy} notice={notice} onDownload={exportDeck} />}
 
       {step >= 2 && step < 5 && (
         <footer className="action-bar">
@@ -368,7 +383,7 @@ function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; up
   </section>;
 }
 
-function PreviewStep({ profile, template, update, onDownload }: { profile: ProfileData; template: ReturnType<typeof getTemplate>; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; onDownload: () => void }) {
+function PreviewStep({ profile, template, update, busy, notice, onDownload }: { profile: ProfileData; template: ReturnType<typeof getTemplate>; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; busy: boolean; notice: string; onDownload: () => Promise<void> }) {
   const [slide, setSlide] = useState(0);
   const p = template.palette;
   const slides = [
@@ -378,7 +393,8 @@ function PreviewStep({ profile, template, update, onDownload }: { profile: Profi
     <div className="career-slide" key="career"><span>SELECTED WORK</span><h2>주요 활동</h2>{profile.careers.filter((item) => item.title).slice(0, 5).map((item) => <div className="preview-career" key={item.id}><b>{item.year || "—"}</b><strong>{item.title}</strong><small>{item.organization}</small></div>)}</div>,
     <div className="end-slide" key="end"><h2>LET'S CREATE<br />A NEW SCENE.</h2><strong>{profile.artistName}</strong><p>{profile.contact}<br />{profile.videoUrl}</p></div>,
   ];
-  return <section className="preview-page"><div className="preview-top"><div><span>05 · 완성</span><h1>프로필이 완성되었어요</h1><p>미리보기를 확인하고 PPTX 파일로 내려받으세요.</p></div><div className="preview-actions"><button className="button ghost" onClick={() => update("introduction", profile.introduction)}><PenLine size={16} /> 내용 수정</button><button className="button primary" onClick={onDownload}><Download size={17} /> PPTX 다운로드</button></div></div>
+  return <section className="preview-page"><div className="preview-top"><div><span>05 · 완성</span><h1>프로필이 완성되었어요</h1><p>아래는 콘텐츠 미리보기입니다. 다운로드할 때 Gemini가 실제 사진을 보고 페이지 서사·사진 역할·레이아웃을 다시 설계합니다.</p></div><div className="preview-actions"><button className="button ghost" onClick={() => update("introduction", profile.introduction)}><PenLine size={16} /> 내용 수정</button><button className="button primary" disabled={busy} onClick={() => void onDownload()}>{busy ? <Loader2 className="spin" size={17} /> : <Download size={17} />} {busy ? "Gemini가 PPT 제작 중" : "AI PPTX 제작·다운로드"}</button></div></div>
+    {notice && <div className={`notice ${notice.includes("문제가") || notice.includes("기본 구성") ? "warning" : "success"}`}>{notice}</div>}
     <div className="preview-workspace"><div className="slide-rail">{slides.map((item, index) => <button className={slide === index ? "selected" : ""} onClick={() => setSlide(index)} key={index}><span>{index + 1}</span><div style={{ background: p.background, color: p.text }}>{index === 0 ? profile.artistName || "ARTIST" : ["", "ABOUT", "STRENGTHS", "WORK", "CONTACT"][index]}</div></button>)}</div><div className="canvas-wrap"><div className="slide-canvas" style={{ background: slide === 1 || slide === 3 ? p.surface : p.background, color: p.text, "--accent": p.accent, "--muted": p.muted } as React.CSSProperties}>{slides[slide]}</div><div className="canvas-controls"><button onClick={() => setSlide(Math.max(0, slide - 1))}><ArrowLeft /></button><span>{slide + 1} / {slides.length}</span><button onClick={() => setSlide(Math.min(slides.length - 1, slide + 1))}><ArrowRight /></button></div></div></div>
     <div className="completion-grid"><article><CheckCircle2 /><div><strong>수정 가능한 PPTX</strong><p>텍스트와 도형을 파워포인트에서 직접 편집할 수 있어요.</p></div></article><article><LayoutTemplate /><div><strong>{template.name}</strong><p>{profile.pageCount}페이지 구성에 맞춰 자동 배치됩니다.</p></div></article><article><RotateCcw /><div><strong>초안 자동 저장</strong><p>브라우저에서 언제든 이어서 수정할 수 있어요.</p></div></article></div></section>;
 }

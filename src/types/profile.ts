@@ -42,6 +42,27 @@ export interface PdfPageAsset {
   selected: boolean;
 }
 
+export type DeckSlideType = "cover" | "about" | "strengths" | "gallery" | "career" | "contact";
+export type DeckLayout = "full_bleed" | "split_left" | "split_right" | "editorial" | "timeline" | "gallery";
+
+export interface DeckSlidePlan {
+  type: DeckSlideType;
+  eyebrow: string;
+  title: string;
+  body: string;
+  bullets: string[];
+  imageRefs: string[];
+  imagePurpose: string;
+  careerIndexes: number[];
+  layout: DeckLayout;
+}
+
+export interface DeckPlan {
+  narrative: string;
+  visualDirection: string;
+  slides: DeckSlidePlan[];
+}
+
 export interface ProfileData {
   source: SourceType | null;
   artistName: string;
