@@ -10,11 +10,27 @@ export interface Career {
 
 export interface ExtractedItem {
   id: string;
-  type: "artist_name" | "introduction" | "career" | "contact" | "social_link" | "region";
+  type:
+    | "artist_name"
+    | "artist_type"
+    | "field"
+    | "introduction"
+    | "tagline"
+    | "career"
+    | "performance"
+    | "award"
+    | "media"
+    | "member"
+    | "contact"
+    | "social_link"
+    | "equipment"
+    | "strength"
+    | "region";
   label: string;
   value: string;
   confidence: number;
   status: ReviewStatus;
+  pageNumber?: number;
 }
 
 export interface PdfPageAsset {

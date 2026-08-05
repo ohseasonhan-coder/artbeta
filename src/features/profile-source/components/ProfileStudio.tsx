@@ -15,6 +15,7 @@ import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-
 import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
 
 interface PdfUploadResponse {
+  text: string;
   items: ExtractedItem[];
   pages: PdfPageAsset[];
   ocrPageCount: number;
@@ -22,11 +23,47 @@ interface PdfUploadResponse {
   analysisMode?: "server" | "browser";
 }
 
+interface AiExtractionResponse {
+  mode: "ai";
+  items: ExtractedItem[];
+  profile: {
+    artistName: string;
+    artistType: "개인" | "단체" | "알 수 없음";
+    primaryField: string;
+    secondaryFields: string[];
+    region: string;
+    members: string[];
+    contacts: string[];
+    socialLinks: string[];
+    introduction: string;
+    tagline: string;
+    strengths: string[];
+  };
+}
+
 const fields = ["보컬", "연주", "국악", "무용", "퍼포먼스", "마술", "진행·MC", "복합예술", "전통예술", "기타"];
 const strengths = ["전문적인 실력", "관객과의 소통", "밝고 즐거운 분위기", "감성적인 분위기", "입장하고 화려한 무대", "전통과 현대의 조화", "가족 모두가 즐길 수 있음", "교육적 요소", "독특한 콘셉트"];
 const experiences = ["기업행사", "공공기관 행사", "지역축제", "학교 행사", "문화재단 공연", "거리공연", "방송·미디어", "해외공연", "아직 공식 경력은 많지 않음"];
 const impressions = ["실력이 뛰어나다", "믿을 수 있다", "행사를 잘 이해한다", "관객 반응이 좋다", "밝고 친근하다", "고급스럽다", "독창적이다", "전통성이 있다", "급한 일정에도 대응할 수 있다"];
 const steps = ["시작", "자료 준비", "프로필 정보", "콘텐츠", "디자인", "완성"];
+
+function normalizeField(value: string) {
+  const keywordMap: Array<[string, string]> = [
+    ["보컬|가수|성악|노래", "보컬"], ["연주|밴드|악기|오케스트라", "연주"], ["국악|판소리|민요", "국악"],
+    ["무용|댄스|춤", "무용"], ["마술|매직", "마술"], ["MC|사회|진행", "진행·MC"], ["전통", "전통예술"],
+    ["퍼포먼스|공연", "퍼포먼스"], ["복합|융복합", "복합예술"],
+  ];
+  return keywordMap.find(([pattern]) => new RegExp(pattern, "i").test(value))?.[1] ?? (fields.includes(value) ? value : "기타");
+}
+
+function itemsToCareers(items: ExtractedItem[]) {
+  return items
+    .filter((item) => ["career", "performance", "award", "media"].includes(item.type))
+    .map((item) => {
+      const year = item.value.match(/(?:19|20)\d{2}(?:[.년\-/]\d{1,2})?(?:[.월\-/]\d{1,2})?/)?.[0] ?? "";
+      return { id: crypto.randomUUID(), year, title: item.value.replace(year, "").replace(/^\s*[·.\-/]\s*/, "").trim(), organization: item.pageNumber ? `${item.label} · ${item.pageNumber}p` : item.label };
+    });
+}
 
 function toggleInList(list: string[], value: string, limit = 99) {
   if (list.includes(value)) return list.filter((item) => item !== value);
@@ -85,6 +122,7 @@ export default function ProfileStudio() {
           const browserData = await analyzePdfInBrowser(file, (progress) => setPdfProgress(progress));
           data = {
             ...browserData,
+            text: browserData.combinedText,
             items: inferItemsFromText(browserData.combinedText),
             analysisMode: "browser",
           };
@@ -93,20 +131,57 @@ export default function ProfileStudio() {
           throw new Error(`${serverErrorMessage} 브라우저 재분석 실패: ${browserMessage}`);
         }
       }
-      const name = data.items.find((item: { type: string }) => item.type === "artist_name")?.value;
+      let finalItems = data.items;
+      let aiProfile: AiExtractionResponse["profile"] | undefined;
+      let aiMode = false;
+      setPdfProgress(90);
+      setNotice("AI가 PDF 이미지와 원문을 함께 읽고 연혁·공연·수상을 정리하고 있어요.");
+      try {
+        const response = await fetch("/api/ai/extract-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: data.text || data.pages.map((page) => `[${page.pageNumber}페이지]\n${page.text}`).join("\n\n"),
+            pages: data.pages.slice(0, 10),
+          }),
+        });
+        const result = await response.json().catch(() => ({})) as Partial<AiExtractionResponse> & { code?: string };
+        if (response.ok && result.items && result.profile) {
+          finalItems = result.items;
+          aiProfile = result.profile;
+          aiMode = true;
+        }
+      } catch {
+        // AI 호출이 실패해도 OCR·규칙 기반 결과로 계속 진행합니다.
+      }
+      const name = aiProfile?.artistName || finalItems.find((item) => item.type === "artist_name")?.value;
+      const careers = itemsToCareers(finalItems);
       setProfile((current) => ({
         ...current,
         artistName: name || current.artistName,
-        extractedItems: data.items,
+        artistType: aiProfile?.artistType && aiProfile.artistType !== "알 수 없음" ? aiProfile.artistType : current.artistType,
+        primaryField: aiProfile?.primaryField ? normalizeField(aiProfile.primaryField) : current.primaryField,
+        secondaryField: aiProfile?.secondaryFields.join(", ") || current.secondaryField,
+        region: aiProfile?.region || current.region,
+        members: aiProfile?.members.join(", ") || current.members,
+        contact: aiProfile?.contacts.join(" · ") || current.contact,
+        videoUrl: aiProfile?.socialLinks[0] || current.videoUrl,
+        introduction: aiProfile?.introduction || current.introduction,
+        tagline: aiProfile?.tagline || current.tagline,
+        generatedStrengths: aiProfile?.strengths || current.generatedStrengths,
+        careers: careers.length ? careers : current.careers,
+        extractedItems: finalItems,
         pdfPageAssets: data.pages || [],
       }));
-      setNotice(data.warnings?.length
+      setNotice(aiMode
+        ? `AI 정밀 분석 완료: 연혁을 포함해 ${finalItems.length}개 항목을 찾았어요. 원문과 대조해 승인해 주세요.`
+        : data.warnings?.length
         ? `PDF를 부분 분석했습니다. ${data.warnings[0]}`
         : data.analysisMode === "browser"
           ? "서버 대신 브라우저에서 PDF 분석을 완료했어요. 페이지 이미지와 OCR 결과를 확인해 주세요."
         : data.ocrPageCount > 0
-          ? `이미지형 ${data.ocrPageCount}개 페이지를 OCR로 읽고, 전체 페이지를 이미지 자산으로 준비했어요.`
-          : "전체 페이지의 텍스트와 이미지 자산을 분석했어요.");
+          ? `이미지형 ${data.ocrPageCount}개 페이지를 OCR로 읽었어요. AI 키를 연결하면 페이지 이미지까지 정밀 분석합니다.`
+          : "기본 분석을 완료했어요. AI 키를 연결하면 연혁과 고유명사를 더 정밀하게 분류합니다.");
       setPdfProgress(100);
       setTimeout(() => setStep(2), 450);
     } catch (error) {
@@ -199,7 +274,7 @@ function SourceStep({ onSelect }: { onSelect: (source: SourceType) => void }) {
 function PdfStep({ name, progress, busy, notice, onUpload }: { name: string; progress: number; busy: boolean; notice: string; onUpload: (file?: File) => void }) {
   const prevent = (event: DragEvent) => { event.preventDefault(); event.stopPropagation(); };
   return <section className="stage narrow">
-    <div className="section-heading"><span>01 · 자료 준비</span><h1>기존 PDF 프로필을 올려주세요</h1><p>글과 경력을 읽어 새 프로필에 활용할 내용을 정리합니다. 사용하기 전 직접 확인할 수 있어요.</p></div>
+    <div className="section-heading"><span>01 · AI 자료 분석</span><h1>기존 PDF 프로필을 올려주세요</h1><p>텍스트형·이미지형 PDF를 함께 읽고 연혁, 공연, 수상, 연락처와 이미지 자산을 정리합니다. 사용하기 전 직접 확인할 수 있어요.</p></div>
     <label className={`dropzone ${busy ? "loading" : ""}`} onDragEnter={prevent} onDragOver={prevent} onDrop={(event) => { prevent(event); onUpload(event.dataTransfer.files[0]); }}>
       <input type="file" accept="application/pdf" onChange={(event) => onUpload(event.target.files?.[0])} />
       <div className="drop-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</div>
@@ -223,9 +298,9 @@ function InformationStep({ profile, update, setProfile, notice }: { profile: Pro
   return <section className="stage form-stage"><div className="section-heading"><span>02 · 프로필 정보</span><h1>{extracted.length ? "추출된 내용을 확인해 주세요" : "예술인에 대해 알려주세요"}</h1><p>{extracted.length ? "PDF에서 찾은 정보입니다. 수정하거나 제외한 뒤 프로필에 반영할 수 있어요." : "긴 글 대신 꼭 필요한 정보만 입력하면 됩니다."}</p></div>
     {notice && <div className={`notice ${notice.includes("부분 분석") ? "warning" : "success"}`}>{notice}</div>}
     {profile.pdfPageAssets.length > 0 && <div className="form-card pdf-assets-card"><div className="card-heading"><div><h2>PDF 이미지 자산</h2><p>스캔본을 포함한 모든 페이지를 이미지로 보존했습니다. 프로필에 재사용할 페이지를 선택하세요.</p></div><span>{profile.pdfPageAssets.filter((asset) => asset.selected).length}개 선택</span></div><div className="pdf-page-grid">{profile.pdfPageAssets.map((asset) => <article className={asset.selected ? "selected" : ""} key={asset.pageNumber}><button className="pdf-page-preview" onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber === asset.pageNumber ? { ...page, selected: !page.selected } : page) }))}><img src={asset.previewDataUrl} alt={`PDF ${asset.pageNumber}페이지`} /><span>{asset.selected ? <Check size={14} /> : <Plus size={14} />}</span></button><div><strong>{asset.pageNumber}페이지</strong><small className={asset.textSource}>{asset.textSource === "ocr" ? `OCR ${Math.round(asset.confidence * 100)}%` : asset.textSource === "embedded" ? "텍스트 포함" : "이미지 자산"}</small></div></article>)}</div></div>}
-    {extracted.length > 0 && <div className="review-panel"><div className="review-title"><h2>PDF 분석 결과</h2><span>{extracted.length}개 항목</span></div>{extracted.map((item) => <div className="review-item" key={item.id}><div className={`confidence ${item.confidence < .7 ? "low" : ""}`}>{Math.round(item.confidence * 100)}%</div><label><span>{item.label}</span><textarea value={item.value} disabled={item.status === "excluded"} onChange={(event) => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, value: event.target.value, status: "edited" } : target) }))} /></label><button className={item.status === "excluded" ? "excluded" : ""} onClick={() => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, status: target.status === "excluded" ? "approved" : "excluded" } : target) }))}>{item.status === "excluded" ? "복원" : "제외"}</button></div>)}</div>}
+    {extracted.length > 0 && <div className="review-panel"><div className="review-title"><h2>AI·PDF 분석 결과</h2><span>{extracted.length}개 항목</span></div>{extracted.map((item) => <div className="review-item" key={item.id}><div className={`confidence ${item.confidence < .7 ? "low" : ""}`}>{Math.round(item.confidence * 100)}%</div><label><span>{item.label}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><textarea value={item.value} disabled={item.status === "excluded"} onChange={(event) => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, value: event.target.value, status: "edited" } : target) }))} /></label><button className={item.status === "excluded" ? "excluded" : ""} onClick={() => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, status: target.status === "excluded" ? "approved" : "excluded" } : target) }))}>{item.status === "excluded" ? "복원" : "제외"}</button></div>)}</div>}
     <div className="form-card"><h2>기본 정보</h2><div className="form-grid"><label><span>활동명 *</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아름 / 아트밴드" /></label><label><span>활동 형태 *</span><div className="segmented"><button className={profile.artistType === "개인" ? "selected" : ""} onClick={() => update("artistType", "개인")}>개인</button><button className={profile.artistType === "단체" ? "selected" : ""} onClick={() => update("artistType", "단체")}>단체</button></div></label><label><span>주 활동 분야 *</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>주요 활동 지역</span><input value={profile.region} onChange={(event) => update("region", event.target.value)} placeholder="예: 서울·경기 / 전국" /></label><label><span>연락 방법</span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><label><span>대표 영상 링크</span><input value={profile.videoUrl} onChange={(event) => update("videoUrl", event.target.value)} placeholder="https://" /></label></div></div>
-    <div className="form-card"><div className="card-heading"><div><h2>주요 경력</h2><p>최대 5개까지 핵심 활동을 적어주세요.</p></div><button onClick={() => profile.careers.length < 5 && update("careers", [...profile.careers, { id: crypto.randomUUID(), year: "", title: "", organization: "" }])}><Plus size={16} /> 경력 추가</button></div>{profile.careers.map((career) => <div className="career-row" key={career.id}><input value={career.year} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, year: event.target.value } : item))} placeholder="연도" /><input value={career.title} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, title: event.target.value } : item))} placeholder="공연·활동명" /><input value={career.organization} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, organization: event.target.value } : item))} placeholder="기관·장소" /><button aria-label="경력 삭제" onClick={() => update("careers", profile.careers.filter((item) => item.id !== career.id))}><Trash2 size={16} /></button></div>)}</div>
+    <div className="form-card"><div className="card-heading"><div><h2>연혁·공연·수상</h2><p>PDF에서 찾은 날짜별 활동을 모두 가져왔습니다. 중요한 순서대로 다듬어 주세요.</p></div><button onClick={() => profile.careers.length < 50 && update("careers", [...profile.careers, { id: crypto.randomUUID(), year: "", title: "", organization: "" }])}><Plus size={16} /> 항목 추가</button></div>{profile.careers.map((career) => <div className="career-row" key={career.id}><input value={career.year} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, year: event.target.value } : item))} placeholder="날짜" /><input value={career.title} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, title: event.target.value } : item))} placeholder="공연·활동·수상명" /><input value={career.organization} onChange={(event) => update("careers", profile.careers.map((item) => item.id === career.id ? { ...item, organization: event.target.value } : item))} placeholder="분류·기관·장소" /><button aria-label="경력 삭제" onClick={() => update("careers", profile.careers.filter((item) => item.id !== career.id))}><Trash2 size={16} /></button></div>)}</div>
     <QuestionGroup title="공연에서 가장 자신 있는 특징은 무엇인가요?" hint="최대 3개" options={strengths} selected={profile.strengths} onToggle={(value) => update("strengths", toggleInList(profile.strengths, value, 3))} />
     <QuestionGroup title="어떤 행사 경험이 있나요?" options={experiences} selected={profile.experiences} onToggle={(value) => update("experiences", toggleInList(profile.experiences, value))} />
     <QuestionGroup title="담당자에게 어떤 인상을 주고 싶나요?" hint="최대 3개" options={impressions} selected={profile.impressions} onToggle={(value) => update("impressions", toggleInList(profile.impressions, value, 3))} />

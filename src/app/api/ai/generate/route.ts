@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { zodTextFormat } from "openai/helpers/zod";
+import { z } from "zod";
 import { generateLocalCopy } from "@/features/artist-questionnaire/generators/profile-copy";
 import { ProfileData } from "@/types/profile";
 
@@ -23,19 +25,25 @@ export async function POST(request: Request) {
       purpose: profile.purpose,
       tone: profile.tone,
     };
-    const response = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "입력 사실만 사용하는 문화예술인 프로필 에디터다. 없는 경력, 날짜, 기관명, 수상, 인원, 출연료, 장비를 만들지 않는다. 한국어 JSON으로 tagline, introduction, strengths(문자열 3개)를 반환한다." },
+    const response = await client.responses.parse({
+      model: process.env.OPENAI_MODEL || "gpt-5.6-sol",
+      store: false,
+      input: [
+        { role: "system", content: "입력 사실만 사용하는 문화예술인 프로필 에디터입니다. 없는 경력, 날짜, 기관명, 수상, 인원, 출연료, 장비를 만들지 않습니다. 구체적인 고유명사와 실제 경력을 살려 자연스러운 한국어 문구를 작성합니다." },
         { role: "user", content: JSON.stringify(facts) },
       ],
+      text: {
+        format: zodTextFormat(z.object({
+          tagline: z.string(),
+          introduction: z.string(),
+          strengths: z.array(z.string()).length(3),
+        }), "artist_profile_copy"),
+      },
     });
-    const parsed = JSON.parse(response.choices[0]?.message.content || "{}");
+    const parsed = response.output_parsed ?? fallback;
     return NextResponse.json({ ...fallback, ...parsed, mode: "ai" });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ ...fallback, mode: "local", warning: "AI 연결에 실패해 규칙 기반 문구를 사용했습니다." });
   }
 }
-
