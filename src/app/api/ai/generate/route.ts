@@ -50,6 +50,12 @@ export async function POST(request: Request) {
       secondaryField: profile.secondaryField,
       region: profile.region,
       careers: profile.careers.filter((item) => item.title),
+      extractedFacts: profile.extractedItems
+        .filter((item) => item.status !== "excluded")
+        .map(({ type, label, value, confidence, pageNumber }) => ({ type, label, value, confidence, pageNumber })),
+      pdfPageText: profile.pdfPageAssets
+        .filter((page) => page.text.trim())
+        .map(({ pageNumber, text, textSource }) => ({ pageNumber, text: text.slice(0, 6000), textSource })),
       strengths: profile.strengths,
       experiences: profile.experiences,
       impressions: profile.impressions,

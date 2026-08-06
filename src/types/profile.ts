@@ -67,6 +67,9 @@ export interface DeckPlanMeta {
   mode: "ai" | "local";
   provider: string;
   model: string;
+  qualityScore?: number;
+  coveredFactCount?: number;
+  totalFactCount?: number;
 }
 
 export interface ProfileData {

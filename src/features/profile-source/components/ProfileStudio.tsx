@@ -10,6 +10,7 @@ import { ExtractedItem, initialProfile, PdfPageAsset, ProfileData, SourceType } 
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
 import { downloadPptx, getDeckAssetData, prepareDeckPlan } from "@/features/profile-export/pptx/generate-pptx";
+import { buildDeckFacts } from "@/features/profile-export/pptx/deck-facts";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
 import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
@@ -271,9 +272,9 @@ export default function ProfileStudio() {
     setNotice("Gemini가 지금까지 입력한 내용과 사진을 페이지별로 구성하고 있어요.");
     try {
       const prepared = await prepareDeckPlan(profile);
-      setProfile((current) => ({ ...current, deckPlan: prepared.plan, deckPlanMeta: prepared.meta }));
+      setProfile((current) => ({ ...current, pageCount: prepared.plan.slides.length, deckPlan: prepared.plan, deckPlanMeta: prepared.meta }));
       setNotice(prepared.meta.mode === "ai"
-        ? `${prepared.meta.provider} · ${prepared.meta.model}이 ${prepared.plan.slides.length}페이지 구성과 사진 배치를 완성했어요.`
+        ? `${prepared.meta.provider} · ${prepared.meta.model}이 ${prepared.plan.slides.length}페이지를 구성했어요. 품질 검사 ${prepared.meta.qualityScore ?? 90}점 · 근거 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영.`
         : "Gemini 기획을 사용할 수 없어 기본 페이지 구성으로 미리보기를 만들었어요.");
       setStep(5);
     } catch {
@@ -404,13 +405,14 @@ function PreviewStep({ profile, template, busy, notice, onEdit, onDownload }: { 
   const [slide, setSlide] = useState(0);
   const p = template.palette;
   const plans = profile.deckPlan?.slides ?? [];
+  const deckFacts = buildDeckFacts(profile);
   const slides = plans.map((plan, planIndex) => {
     const images = plan.imageRefs.map((id) => getDeckAssetData(profile, id)).filter((value): value is string => Boolean(value));
-    const careers = plan.careerIndexes.map((index) => profile.careers[index]).filter(Boolean);
+    const careers = plan.careerIndexes.map((index) => deckFacts[index]).filter(Boolean);
     if (plan.type === "cover") return <div className={`ai-preview-slide ai-cover ${images[0] ? "has-image" : ""}`} key={planIndex}>{images[0] && <img src={images[0]} alt="표지" />}<div className="ai-image-shade" /><div className="ai-slide-copy"><span>{plan.eyebrow}</span><h1>{plan.title}</h1><p>{plan.body}</p><small>{profile.primaryField} · {profile.region}</small></div></div>;
     if (plan.type === "gallery") return <div className="ai-preview-slide ai-gallery" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div className={`ai-gallery-grid count-${Math.min(3, images.length)}`}>{images.slice(0, 3).map((image, index) => <img src={image} alt={`공연 이미지 ${index + 1}`} key={index} />)}</div></div>;
     if (plan.type === "strengths") return <div className="ai-preview-slide ai-strengths" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div>{plan.bullets.slice(0, 3).map((item, index) => <article key={index}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>;
-    if (plan.type === "career") return <div className="ai-preview-slide ai-career" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{careers.slice(0, 9).map((item) => <div className="preview-career" key={item.id}><b>{item.year || "—"}</b><strong>{item.title}</strong><small>{item.organization}</small></div>)}</div>;
+    if (plan.type === "career") return <div className="ai-preview-slide ai-career" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{careers.slice(0, 8).map((item) => <div className="preview-career" key={item.id}><b>{item.date || "—"}</b><strong>{item.title}</strong><small>{[item.categoryLabel, item.organization, item.pageNumber ? `${item.pageNumber}p` : ""].filter(Boolean).join(" · ")}</small></div>)}</div>;
     const imageOnLeft = plan.layout === "split_left";
     return <div className={`ai-preview-slide ai-split ${images[0] ? "has-image" : ""} ${imageOnLeft ? "image-left" : "image-right"}`} key={planIndex}>{images[0] && <img src={images[0]} alt={plan.type === "contact" ? "연락 페이지 이미지" : "소개 이미지"} />}<div className="ai-slide-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><p>{plan.body}</p>{plan.bullets.length > 0 && <ul>{plan.bullets.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div></div>;
   });

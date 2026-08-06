@@ -55,9 +55,12 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { profile: Record<string, unknown> & { requestedPageCount?: number }; assets: AssetInput[] };
     const assets = (body.assets ?? []).slice(0, 10);
-    const requestedPageCount = Math.max(4, Math.min(10, Number(body.profile.requestedPageCount) || 6));
+    const requestedPageCount = Math.max(4, Math.min(16, Number(body.profile.requestedPageCount) || 6));
+    const facts = Array.isArray(body.profile.careers) ? body.profile.careers as Array<{ index?: number; category?: string }> : [];
+    const requiredCareerSlides = Math.max(1, Math.ceil(facts.length / 8));
+    const targetPageCount = Math.min(16, Math.max(requestedPageCount, 5 + requiredCareerSlides));
     const parts: Part[] = [{
-      text: `당신은 Gamma 수준의 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 아래 사실과 이미지 후보만 사용해 편집 가능한 PPT의 최종 슬라이드 기획을 만드세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 무대 경쟁력, 검증된 활동, 섭외 방법을 짧은 시간에 이해하고 연락하게 만듭니다.\n\n구성 규칙:\n- 반드시 정확히 ${requestedPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact이며 career를 최소 1장 포함합니다.\n- 경력이 9개를 넘으면 career 슬라이드를 여러 장으로 나누고 careerIndexes가 겹치지 않게 합니다.\n- 각 슬라이드는 하나의 주장만 전달합니다. 입력 내용을 페이지마다 복사하거나 장황하게 요약하지 않습니다.\n- 제목은 ABOUT, HISTORY 같은 분류명이 아니라 그 페이지가 전달할 구체적인 메시지로 씁니다.\n- 표지는 활동명과 짧은 태그라인만 두며 설명문을 넣지 않습니다.\n- 이미지 후보는 실제 화면을 보고 서사를 강화할 때만 선택합니다. 대표사진은 정체성, 공연사진은 무대 규모·관객 반응·장르, pdf_page는 포스터·인증·작품 배열의 증거로 사용합니다.\n- 같은 이미지는 전체 PPT에서 한 번만 사용하고 imageRefs에는 제공된 정확한 asset id만 씁니다.\n- 경력은 원본 인덱스를 careerIndexes에 담고 사실을 만들거나 과장하지 않습니다.\n- 내부 기획 메모는 imagePurpose에만 쓰고 슬라이드 본문에는 노출하지 않습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 55자, bullets 없음\n- about: title 34자, body 160자, bullets 최대 3개·각 34자\n- strengths: title 34자, body 없음, bullets 정확히 3개·각 42자\n- gallery: title 34자, body 70자, bullets 없음\n- career: title 34자, body 70자, bullets 없음, 경력 최대 9개\n- contact: title 30자, body 110자, bullets 최대 2개·각 36자\n- 분할 레이아웃에 이미지를 쓰는 about/contact 제목은 22자 이내로 더 짧게 씁니다.\n- 공간보다 내용이 많으면 글자를 작게 만들지 말고 핵심 사실만 남겨 줄입니다.\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
+      text: `당신은 Gamma 수준의 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 아래 사실과 이미지 후보만 사용해 편집 가능한 PPT의 최종 슬라이드 기획을 만드세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 무대 경쟁력, 검증된 활동, 섭외 방법을 짧은 시간에 이해하고 연락하게 만듭니다.\n\n중요: careers는 사용자가 직접 입력한 경력과 PDF에서 추출해 제외하지 않은 수상·공연·주요 활동·언론 사실을 합친 전체 근거 목록입니다. 일부만 골라 버리지 말고 모든 인덱스를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 페이지 텍스트도 소개·강점·제목을 구체화하는 근거로 사용하세요.\n\n구성 규칙:\n- 내용 누락을 막기 위해 요청 ${requestedPageCount}장보다 늘어난 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- career 슬라이드는 최소 ${requiredCareerSlides}장이며 한 장당 최대 8개입니다. careers의 0~${Math.max(0, facts.length - 1)} 인덱스를 중복·누락 없이 careerIndexes에 모두 담습니다.\n- 수상·선정, 공연·활동, 방송·언론은 서로 의미가 드러나도록 career 페이지 제목과 흐름을 구분합니다.\n- 각 슬라이드는 하나의 주장만 전달합니다. 입력 내용을 페이지마다 복사하거나 장황하게 요약하지 않습니다.\n- 제목은 ABOUT, HISTORY 같은 분류명이 아니라 그 페이지가 전달할 구체적인 메시지로 씁니다.\n- 표지는 활동명과 짧은 태그라인만 두며 설명문을 넣지 않습니다.\n- 이미지 후보는 실제 화면을 보고 서사를 강화할 때만 선택합니다. 이미지는 원본 비율을 유지해 프레임 안에 배치되므로, 세로 사진·포스터도 잘리지 않는 레이아웃을 선택합니다.\n- 같은 이미지는 전체 PPT에서 한 번만 사용하고 imageRefs에는 제공된 정확한 asset id만 씁니다.\n- 경력은 원본 인덱스를 careerIndexes에 담고 사실을 만들거나 과장하지 않습니다.\n- 내부 기획 메모는 imagePurpose에만 쓰고 슬라이드 본문에는 노출하지 않습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 55자, bullets 없음\n- about: title 34자, body 160자, bullets 최대 3개·각 34자\n- strengths: title 34자, body 없음, bullets 정확히 3개·각 42자\n- gallery: title 34자, body 70자, bullets 없음\n- career: title 34자, body 70자, bullets 없음, 근거 최대 8개\n- contact: title 30자, body 110자, bullets 최대 2개·각 36자\n- 분할 레이아웃에 이미지를 쓰는 about/contact 제목은 22자 이내로 더 짧게 씁니다.\n- 공간보다 내용이 많으면 글자를 작게 만들지 말고 핵심 사실만 남겨 줄입니다.\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
     }];
 
     assets.forEach((asset) => {
@@ -79,10 +82,33 @@ export async function POST(request: Request) {
       },
     });
     const plan = planSchema.parse(JSON.parse(response.text || "{}"));
-    if (plan.slides.length !== requestedPageCount) throw new Error("Gemini가 요청한 페이지 수를 지키지 않았습니다.");
+    if (plan.slides.length !== targetPageCount) throw new Error("Gemini가 필요한 페이지 수를 지키지 않았습니다.");
     if (plan.slides[0]?.type !== "cover" || plan.slides.at(-1)?.type !== "contact" || !plan.slides.some((slide) => slide.type === "career")) {
       throw new Error("Gemini가 필수 슬라이드 구조를 지키지 않았습니다.");
     }
+    let careerSlides = plan.slides.filter((slide) => slide.type === "career");
+    while (careerSlides.length < requiredCareerSlides) {
+      const candidate = plan.slides.findLast((slide, index) => index > 1 && index < plan.slides.length - 1 && slide.type !== "career");
+      if (!candidate) break;
+      Object.assign(candidate, { type: "career", eyebrow: "VERIFIED PROFILE", title: "문서로 확인된 주요 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "timeline" });
+      careerSlides = plan.slides.filter((slide) => slide.type === "career");
+    }
+    if (careerSlides.length < requiredCareerSlides) throw new Error("추출 사실을 담을 경력 페이지가 부족합니다.");
+
+    const categoryPriority: Record<string, number> = { award: 0, performance: 1, media: 2, career: 3 };
+    const factIndexes = facts.map((fact, index) => ({ index, priority: categoryPriority[fact.category || "career"] ?? 3 })).sort((a, b) => a.priority - b.priority).map(({ index }) => index);
+    careerSlides.forEach((slide, index) => {
+      const indexes = factIndexes.slice(index * 8, index * 8 + 8);
+      const categories = new Set(indexes.map((factIndex) => facts[factIndex]?.category));
+      slide.careerIndexes = indexes;
+      slide.eyebrow = categories.has("award") ? "AWARDS & RECOGNITION" : categories.has("performance") ? "SELECTED ACTIVITIES" : categories.has("media") ? "MEDIA & PRESS" : "SELECTED HISTORY";
+      slide.title = categories.has("award") ? "수상과 선정으로 확인된 전문성" : categories.has("performance") ? "주요 무대와 활동의 기록" : categories.has("media") ? "방송과 언론이 기록한 활동" : "지속적으로 이어온 주요 경력";
+      slide.body = "";
+      slide.bullets = [];
+      slide.imageRefs = [];
+      slide.layout = "timeline";
+    });
+
     const validIds = new Set(assets.map((asset) => asset.id));
     const usedIds = new Set<string>();
     plan.slides.forEach((slide) => {
@@ -94,9 +120,16 @@ export async function POST(request: Request) {
       slide.title = compactText(slide.title, budget.title);
       slide.body = compactText(slide.body, bodyBudget);
       slide.bullets = slide.bullets.slice(0, budget.bullets).map((item) => compactText(item, budget.bullet));
-      slide.careerIndexes = [...new Set(slide.careerIndexes)].slice(0, 9);
+      slide.careerIndexes = [...new Set(slide.careerIndexes)].filter((index) => index < facts.length).slice(0, 8);
     });
-    return NextResponse.json({ plan, mode: "ai", provider: "Gemini", model: process.env.GEMINI_MODEL || "gemini-3.6-flash" });
+    const coveredIndexes = new Set(plan.slides.flatMap((slide) => slide.type === "career" ? slide.careerIndexes : []));
+    const awardIndexes = facts.map((fact, index) => fact.category === "award" ? index : -1).filter((index) => index >= 0);
+    const coverage = facts.length ? coveredIndexes.size / facts.length : 1;
+    const awardCoverage = awardIndexes.length ? awardIndexes.filter((index) => coveredIndexes.has(index)).length / awardIndexes.length : 1;
+    const structureScore = plan.slides[0]?.type === "cover" && plan.slides.at(-1)?.type === "contact" ? 20 : 0;
+    const qualityScore = Math.round(structureScore + coverage * 45 + awardCoverage * 15 + 10 + 10);
+    if (qualityScore < 90) throw new Error(`PPT 품질 점수 미달: ${qualityScore}`);
+    return NextResponse.json({ plan, mode: "ai", provider: "Gemini", model: process.env.GEMINI_MODEL || "gemini-3.6-flash", qualityScore, coveredFactCount: coveredIndexes.size, totalFactCount: facts.length });
   } catch (error) {
     console.error("Gemini deck planning failed", error);
     return NextResponse.json({ error: "Gemini가 PPT 구성을 완료하지 못했습니다.", code: "DECK_PLANNING_FAILED" }, { status: 502 });
