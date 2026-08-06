@@ -1,4 +1,4 @@
-import { DeckPlan, DeckSlidePlan, ProfileData } from "@/types/profile";
+import { DeckPlan, DeckPlanMeta, DeckSlidePlan, ProfileData } from "@/types/profile";
 import { getTemplate } from "@/features/design-templates/registry/templates";
 
 const hex = (value: string) => value.replace("#", "");
@@ -17,12 +17,41 @@ export interface DeckExportResult {
   slideCount: number;
 }
 
-function collectAssets(profile: ProfileData): VisualAsset[] {
+export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   const assets: VisualAsset[] = [];
   if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", dataUrl: profile.representativeImage });
   profile.performanceImages.forEach((dataUrl, index) => assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }));
   profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => assets.push({ id: `pdf-page-${page.pageNumber}`, kind: "pdf_page", pageNumber: page.pageNumber, dataUrl: page.previewDataUrl }));
   return assets;
+}
+
+export function getDeckAssetData(profile: ProfileData, id: string) {
+  return collectDeckAssets(profile).find((asset) => asset.id === id)?.dataUrl;
+}
+
+function compactText(value: string, max: number) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!max || text.length <= max) return max ? text : "";
+  const candidate = text.slice(0, max - 1);
+  const breakAt = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf(" · "), candidate.lastIndexOf(" "));
+  return `${candidate.slice(0, breakAt > max * 0.55 ? breakAt : max - 1).trim()}…`;
+}
+
+function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
+  const budgets = {
+    cover: [26, 55, 0, 0], about: [34, 160, 3, 34], strengths: [34, 0, 3, 42],
+    gallery: [34, 70, 0, 0], career: [34, 70, 0, 0], contact: [30, 110, 2, 36],
+  } as const;
+  const [title, body, bulletCount, bulletLength] = budgets[slide.type];
+  return {
+    ...slide,
+    eyebrow: compactText(slide.eyebrow, 28),
+    title: compactText(slide.title, slide.imageRefs.length && ["about", "contact"].includes(slide.type) ? Math.min(title, 22) : title),
+    body: compactText(slide.body, slide.imageRefs.length && slide.type === "about" ? 110 : slide.imageRefs.length && slide.type === "contact" ? 85 : body),
+    bullets: slide.bullets.slice(0, bulletCount).map((item) => compactText(item, bulletLength)),
+    careerIndexes: slide.careerIndexes.slice(0, 9),
+    imageRefs: slide.imageRefs.slice(0, 3),
+  };
 }
 
 async function makeThumbnail(dataUrl: string) {
@@ -47,10 +76,25 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     { type: "about", eyebrow: "IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: profile.introduction, bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean), imageRefs: assets[1] ? [assets[1].id] : [], imagePurpose: "활동 정체성과 분위기", careerIndexes: [], layout: assets[1] ? "split_right" : "editorial" },
     { type: "strengths", eyebrow: "WHY THIS ARTIST", title: "현장에서 분명해지는 경쟁력", body: "", bullets: (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths).slice(0, 3), imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" },
   ];
-  if (assets.length > 2) slides.push({ type: "gallery", eyebrow: "ON STAGE", title: "사진으로 확인하는 무대의 밀도", body: "", bullets: [], imageRefs: assets.slice(2, 5).map((asset) => asset.id), imagePurpose: "공연 규모와 현장성", careerIndexes: [], layout: "gallery" });
-  slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: profile.careers.map((_, index) => index).slice(0, 9), layout: "timeline" });
-  slides.push({ type: "contact", eyebrow: "CONTACT", title: "다음 무대를 함께 만들겠습니다", body: [profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n"), bullets: [], imageRefs: assets[5] ? [assets[5].id] : [], imagePurpose: "마지막 인상", careerIndexes: [], layout: assets[5] ? "split_left" : "editorial" });
-  return { narrative: "정체성에서 현장 경쟁력과 검증된 활동을 거쳐 섭외 행동으로 연결", visualDirection: "선명한 타이포그래피와 실제 공연 이미지 중심", slides: slides.slice(0, Math.max(4, Math.min(10, profile.pageCount))) };
+  const galleryAssets = assets.slice(2);
+  galleryAssets.forEach((_, index) => {
+    if (index % 3 === 0) slides.push({ type: "gallery", eyebrow: "ON STAGE", title: "사진으로 확인하는 무대의 밀도", body: "", bullets: [], imageRefs: galleryAssets.slice(index, index + 3).map((asset) => asset.id), imagePurpose: "공연 규모와 현장성", careerIndexes: [], layout: "gallery" });
+  });
+  const careerIndexes = profile.careers.map((_, index) => index);
+  for (let index = 0; index < Math.max(1, careerIndexes.length); index += 9) {
+    slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: index ? "이어지는 주요 활동" : "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: careerIndexes.slice(index, index + 9), layout: "timeline" });
+  }
+  const contact: DeckSlidePlan = { type: "contact", eyebrow: "CONTACT", title: "다음 무대를 함께 만들겠습니다", body: [profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n"), bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" };
+  const target = Math.max(4, Math.min(10, profile.pageCount));
+  const core = slides.filter((slide) => slide.type !== "contact");
+  while (core.length > target - 1) {
+    const removable = core.findLastIndex((slide) => slide.type === "gallery" || slide.type === "strengths");
+    core.splice(removable > 0 ? removable : core.length - 1, 1);
+  }
+  while (core.length < target - 1) {
+    core.splice(core.length - 1, 0, { type: "gallery", eyebrow: "VISUAL STORY", title: "무대의 장면이 보여주는 예술적 정체성", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" });
+  }
+  return { narrative: "정체성에서 현장 경쟁력과 검증된 활동을 거쳐 섭외 행동으로 연결", visualDirection: "선명한 타이포그래피와 실제 공연 이미지 중심", slides: [...core, contact].map(fitSlideCopy) };
 }
 
 async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
@@ -65,7 +109,10 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
     contact: profile.contact,
     videoUrl: profile.videoUrl,
     careers: profile.careers.map((career, index) => ({ index, ...career })),
+    extractedFacts: profile.extractedItems.filter((item) => item.status !== "excluded").map(({ type, label, value, pageNumber }) => ({ type, label, value, pageNumber })),
     strengths: profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths,
+    experiences: profile.experiences,
+    desiredImpression: profile.impressions,
     introduction: profile.introduction,
     tagline: profile.tagline,
     purpose: profile.purpose,
@@ -77,21 +124,27 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
   return response.json() as Promise<{ plan: DeckPlan; mode: "ai"; provider: string; model: string }>;
 }
 
+export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: DeckPlan; meta: DeckPlanMeta }> {
+  const assets = collectDeckAssets(profile);
+  try {
+    const result = await requestDeckPlan(profile, assets);
+    return { plan: { ...result.plan, slides: result.plan.slides.map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model } };
+  } catch {
+    return { plan: fallbackPlan(profile, assets), meta: { mode: "local", provider: "기본 기획", model: "로컬" } };
+  }
+}
+
 export async function downloadPptx(profile: ProfileData): Promise<DeckExportResult> {
   const PptxGenJS = (await import("pptxgenjs")).default;
   const pptx = new PptxGenJS();
   const template = getTemplate(profile.templateKey);
   const p = template.palette;
-  const assets = collectAssets(profile);
-  let plan = fallbackPlan(profile, assets);
-  let exportMeta: Omit<DeckExportResult, "slideCount"> = { mode: "local", provider: "기본 기획", model: "로컬" };
-  try {
-    const result = await requestDeckPlan(profile, assets);
-    plan = result.plan;
-    exportMeta = { mode: "ai", provider: result.provider, model: result.model };
-  } catch {
-    // Gemini를 사용할 수 없어도 편집 가능한 PPTX는 생성합니다.
-  }
+  const assets = collectDeckAssets(profile);
+  const prepared = profile.deckPlan && profile.deckPlanMeta
+    ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
+    : await prepareDeckPlan(profile);
+  const plan = { ...prepared.plan, slides: prepared.plan.slides.map(fitSlideCopy) };
+  const exportMeta = prepared.meta;
 
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "Artfolio Studio";
@@ -128,15 +181,15 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: "071019", transparency: 38 }, line: { transparency: 100 } });
       }
       addEyebrow(slide, slidePlan.eyebrow, Boolean(primaryImage));
-      slide.addText(slidePlan.title || profile.artistName || "ARTIST", { x: 0.78, y: 2.25, w: 11.6, h: 1.25, fontSize: 52, bold: true, color: primaryImage ? "FFFFFF" : hex(p.text), margin: 0, fit: "shrink" });
-      slide.addText(slidePlan.body || profile.tagline, { x: 0.82, y: 3.75, w: 8.8, h: 0.85, fontSize: 22, color: primaryImage ? "F1F4F6" : hex(p.muted), margin: 0, fit: "shrink" });
+      slide.addText(slidePlan.title || profile.artistName || "ARTIST", { x: 0.78, y: 2.25, w: 11.6, h: 1.25, fontSize: 52, bold: true, color: primaryImage ? "FFFFFF" : hex(p.text), margin: 0 });
+      slide.addText(slidePlan.body || profile.tagline, { x: 0.82, y: 3.75, w: 8.8, h: 0.85, fontSize: 22, color: primaryImage ? "F1F4F6" : hex(p.muted), margin: 0 });
       slide.addText(`${profile.primaryField} · ${profile.region}`.replace(/^ · | · $/g, ""), { x: 0.82, y: 6.65, w: 6.5, h: 0.25, fontSize: 10, color: primaryImage ? "FFFFFF" : hex(p.muted), margin: 0 });
       return;
     }
 
     if (slidePlan.type === "gallery" && images.length) {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.8, h: 0.62, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.8, h: 0.62, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
       const frames = images.length === 1
         ? [{ x: 0.78, y: 2.05, w: 11.78, h: 4.45 }]
         : images.length === 2
@@ -149,13 +202,13 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "career") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
       const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : profile.careers.map((_, index) => index)).map((index) => profile.careers[index]).filter(Boolean).slice(0, 9);
       selected.forEach((item, index) => {
         const y = 2.15 + index * 0.49;
         slide.addText(item.year || "—", { x: 0.82, y, w: 1.35, h: 0.24, fontSize: 11, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addText(item.title, { x: 2.25, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 14, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
-        slide.addText(item.organization, { x: 9.1, y, w: 3.25, h: 0.24, fontSize: 9, color: hex(p.muted), margin: 0, align: "right", fit: "shrink" });
+        slide.addText(compactText(item.title, 72), { x: 2.25, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 14, bold: true, color: hex(p.text), margin: 0 });
+        slide.addText(compactText(item.organization, 45), { x: 9.1, y, w: 3.25, h: 0.24, fontSize: 9, color: hex(p.muted), margin: 0, align: "right" });
         slide.addShape(pptx.ShapeType.line, { x: 2.25, y: y + 0.34, w: 10.1, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
@@ -164,13 +217,13 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "strengths") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.75, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.75, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
       const bullets = slidePlan.bullets.length ? slidePlan.bullets : profile.generatedStrengths;
       bullets.slice(0, 3).forEach((item, index) => {
         const x = 0.82 + index * 4.08;
         slide.addText(`0${index + 1}`, { x, y: 2.45, w: 0.7, h: 0.45, fontSize: 16, bold: true, color: hex(p.accent), margin: 0 });
         slide.addShape(pptx.ShapeType.line, { x, y: 3.02, w: 3.45, h: 0, line: { color: hex(p.accent), width: 1.2 } });
-        slide.addText(item, { x, y: 3.42, w: 3.45, h: 1.45, fontSize: 24, bold: true, color: hex(p.text), margin: 0, fit: "shrink", valign: "middle" });
+        slide.addText(item, { x, y: 3.42, w: 3.45, h: 1.45, fontSize: 24, bold: true, color: hex(p.text), margin: 0, valign: "middle" });
       });
       addFooter(slide, slideIndex + 1);
       return;
@@ -180,9 +233,9 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0 : 7.55, 0, 5.78, 7.5, slidePlan.imagePurpose);
     const textX = primaryImage && imageOnLeft ? 6.55 : 0.78;
     const textW = primaryImage ? 5.9 : 11.7;
-    addEyebrow(slide, slidePlan.eyebrow);
-    slide.addText(slidePlan.title, { x: textX, y: 1.35, w: textW, h: 1.3, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
-    slide.addText(slidePlan.body || (slidePlan.type === "about" ? profile.introduction : [profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n")), { x: textX, y: 3.1, w: primaryImage ? 5.55 : 8.8, h: 1.75, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink", breakLine: false, paraSpaceAfter: 8 });
+    slide.addText(slidePlan.eyebrow || "ARTIST PROFILE", { x: textX, y: 0.6, w: Math.min(4.8, textW), h: 0.28, fontSize: 10, bold: true, charSpacing: 2.5, color: hex(p.accent), margin: 0 });
+    slide.addText(slidePlan.title, { x: textX, y: 1.35, w: textW, h: 1.3, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
+    slide.addText(slidePlan.body || (slidePlan.type === "about" ? compactText(profile.introduction, primaryImage ? 110 : 160) : compactText([profile.contact, profile.videoUrl, profile.region].filter(Boolean).join(" · "), primaryImage ? 85 : 110)), { x: textX, y: 3.1, w: primaryImage ? 5.55 : 8.8, h: 1.75, fontSize: 17, color: hex(p.muted), margin: 0, breakLine: false, paraSpaceAfter: 8 });
     if (slidePlan.bullets.length) slide.addText(slidePlan.bullets.map((text) => ({ text, options: { bullet: { indent: 18 }, breakLine: true } })), { x: textX, y: 5.15, w: primaryImage ? 5.5 : 8.8, h: 1.15, fontSize: 15, color: hex(p.text), margin: 0, breakLine: false });
     addFooter(slide, slideIndex + 1);
   });

@@ -63,6 +63,12 @@ export interface DeckPlan {
   slides: DeckSlidePlan[];
 }
 
+export interface DeckPlanMeta {
+  mode: "ai" | "local";
+  provider: string;
+  model: string;
+}
+
 export interface ProfileData {
   source: SourceType | null;
   artistName: string;
@@ -88,6 +94,8 @@ export interface ProfileData {
   performanceImages: string[];
   extractedItems: ExtractedItem[];
   pdfPageAssets: PdfPageAsset[];
+  deckPlan?: DeckPlan;
+  deckPlanMeta?: DeckPlanMeta;
 }
 
 export const initialProfile: ProfileData = {

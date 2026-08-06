@@ -9,7 +9,7 @@ import {
 import { ExtractedItem, initialProfile, PdfPageAsset, ProfileData, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
-import { downloadPptx } from "@/features/profile-export/pptx/generate-pptx";
+import { downloadPptx, getDeckAssetData, prepareDeckPlan } from "@/features/profile-export/pptx/generate-pptx";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
 import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
@@ -266,6 +266,23 @@ export default function ProfileStudio() {
     }
   };
 
+  const prepareDeck = async () => {
+    setBusy(true);
+    setNotice("Gemini가 지금까지 입력한 내용과 사진을 페이지별로 구성하고 있어요.");
+    try {
+      const prepared = await prepareDeckPlan(profile);
+      setProfile((current) => ({ ...current, deckPlan: prepared.plan, deckPlanMeta: prepared.meta }));
+      setNotice(prepared.meta.mode === "ai"
+        ? `${prepared.meta.provider} · ${prepared.meta.model}이 ${prepared.plan.slides.length}페이지 구성과 사진 배치를 완성했어요.`
+        : "Gemini 기획을 사용할 수 없어 기본 페이지 구성으로 미리보기를 만들었어요.");
+      setStep(5);
+    } catch {
+      setNotice("PPT 페이지 기획 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const resetDraft = () => {
     void clearProfileDraft(); setProfile(initialProfile); setStep(0); setPdfName(""); setNotice("");
   };
@@ -296,12 +313,12 @@ export default function ProfileStudio() {
       {step === 2 && <InformationStep profile={profile} update={update} setProfile={setProfile} notice={notice} />}
       {step === 3 && <ContentStep profile={profile} update={update} busy={busy} generate={generateCopy} notice={notice} />}
       {step === 4 && <DesignStep profile={profile} update={update} uploadImage={uploadImage} />}
-      {step === 5 && <PreviewStep profile={profile} template={template} update={update} busy={busy} notice={notice} onDownload={exportDeck} />}
+      {step === 5 && <PreviewStep profile={profile} template={template} busy={busy} notice={notice} onEdit={() => setStep(3)} onDownload={exportDeck} />}
 
       {step >= 2 && step < 5 && (
         <footer className="action-bar">
           <button className="button ghost" onClick={() => setStep(step - 1)}><ArrowLeft size={17} /> 이전</button>
-          <div><span>{step + 1} / 6</span><button className="button primary" disabled={!canContinue} onClick={() => setStep(step + 1)}>다음 단계 <ArrowRight size={17} /></button></div>
+          <div><span>{step + 1} / 6</span><button className="button primary" disabled={!canContinue || busy} onClick={() => step === 4 ? void prepareDeck() : setStep(step + 1)}>{step === 4 && busy ? <><Loader2 className="spin" size={17} /> Gemini가 PPT 구성 중</> : <>다음 단계 <ArrowRight size={17} /></>}</button></div>
         </footer>
       )}
     </main>
@@ -383,18 +400,24 @@ function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; up
   </section>;
 }
 
-function PreviewStep({ profile, template, update, busy, notice, onDownload }: { profile: ProfileData; template: ReturnType<typeof getTemplate>; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; busy: boolean; notice: string; onDownload: () => Promise<void> }) {
+function PreviewStep({ profile, template, busy, notice, onEdit, onDownload }: { profile: ProfileData; template: ReturnType<typeof getTemplate>; busy: boolean; notice: string; onEdit: () => void; onDownload: () => Promise<void> }) {
   const [slide, setSlide] = useState(0);
   const p = template.palette;
-  const slides = [
-    <div className="cover-slide" key="cover"><span>ARTIST PROFILE</span><h1>{profile.artistName || "ARTIST NAME"}</h1><p>{profile.tagline || `${profile.primaryField}로 만나는 새로운 장면`}</p><small>{profile.primaryField} · {new Date().getFullYear()}</small></div>,
-    <div className="about-slide" key="about"><span>01 · ABOUT</span><h2>{profile.tagline || "예술로 오래 기억될 장면을 만듭니다"}</h2><p>{profile.introduction || "소개문을 입력해 주세요."}</p></div>,
-    <div className="strength-slide" key="strength"><span>CORE STRENGTHS</span><h2>무대를 완성하는 세 가지 힘</h2><div>{(profile.generatedStrengths.length ? profile.generatedStrengths : ["분야의 전문성", "유연한 프로그램 구성", "관객과의 호흡"]).slice(0, 3).map((item, index) => <article key={item}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>,
-    <div className="career-slide" key="career"><span>SELECTED WORK</span><h2>주요 활동</h2>{profile.careers.filter((item) => item.title).slice(0, 5).map((item) => <div className="preview-career" key={item.id}><b>{item.year || "—"}</b><strong>{item.title}</strong><small>{item.organization}</small></div>)}</div>,
-    <div className="end-slide" key="end"><h2>LET'S CREATE<br />A NEW SCENE.</h2><strong>{profile.artistName}</strong><p>{profile.contact}<br />{profile.videoUrl}</p></div>,
-  ];
-  return <section className="preview-page"><div className="preview-top"><div><span>05 · 완성</span><h1>프로필이 완성되었어요</h1><p>아래는 콘텐츠 미리보기입니다. 다운로드할 때 Gemini가 실제 사진을 보고 페이지 서사·사진 역할·레이아웃을 다시 설계합니다.</p></div><div className="preview-actions"><button className="button ghost" onClick={() => update("introduction", profile.introduction)}><PenLine size={16} /> 내용 수정</button><button className="button primary" disabled={busy} onClick={() => void onDownload()}>{busy ? <Loader2 className="spin" size={17} /> : <Download size={17} />} {busy ? "Gemini가 PPT 제작 중" : "AI PPTX 제작·다운로드"}</button></div></div>
+  const plans = profile.deckPlan?.slides ?? [];
+  const slides = plans.map((plan, planIndex) => {
+    const images = plan.imageRefs.map((id) => getDeckAssetData(profile, id)).filter((value): value is string => Boolean(value));
+    const careers = plan.careerIndexes.map((index) => profile.careers[index]).filter(Boolean);
+    if (plan.type === "cover") return <div className={`ai-preview-slide ai-cover ${images[0] ? "has-image" : ""}`} key={planIndex}>{images[0] && <img src={images[0]} alt="표지" />}<div className="ai-image-shade" /><div className="ai-slide-copy"><span>{plan.eyebrow}</span><h1>{plan.title}</h1><p>{plan.body}</p><small>{profile.primaryField} · {profile.region}</small></div></div>;
+    if (plan.type === "gallery") return <div className="ai-preview-slide ai-gallery" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div className={`ai-gallery-grid count-${Math.min(3, images.length)}`}>{images.slice(0, 3).map((image, index) => <img src={image} alt={`공연 이미지 ${index + 1}`} key={index} />)}</div></div>;
+    if (plan.type === "strengths") return <div className="ai-preview-slide ai-strengths" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div>{plan.bullets.slice(0, 3).map((item, index) => <article key={index}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>;
+    if (plan.type === "career") return <div className="ai-preview-slide ai-career" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{careers.slice(0, 9).map((item) => <div className="preview-career" key={item.id}><b>{item.year || "—"}</b><strong>{item.title}</strong><small>{item.organization}</small></div>)}</div>;
+    const imageOnLeft = plan.layout === "split_left";
+    return <div className={`ai-preview-slide ai-split ${images[0] ? "has-image" : ""} ${imageOnLeft ? "image-left" : "image-right"}`} key={planIndex}>{images[0] && <img src={images[0]} alt={plan.type === "contact" ? "연락 페이지 이미지" : "소개 이미지"} />}<div className="ai-slide-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><p>{plan.body}</p>{plan.bullets.length > 0 && <ul>{plan.bullets.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div></div>;
+  });
+  const visibleSlides = slides.length ? slides : [<div className="ai-preview-slide ai-cover" key="empty"><div className="ai-slide-copy"><span>ARTIST PROFILE</span><h1>{profile.artistName}</h1><p>{profile.tagline}</p></div></div>];
+  const activePlan = plans[slide];
+  return <section className="preview-page"><div className="preview-top"><div><span>05 · 완성</span><h1>Gemini가 구성한 프로필입니다</h1><p>현재 미리보기와 다운로드되는 PPTX는 같은 페이지 기획·문구·사진 배치를 사용합니다.</p></div><div className="preview-actions"><button className="button ghost" onClick={onEdit}><PenLine size={16} /> 내용 수정</button><button className="button primary" disabled={busy} onClick={() => void onDownload()}>{busy ? <Loader2 className="spin" size={17} /> : <Download size={17} />} {busy ? "PPTX 제작 중" : "이 구성으로 PPTX 다운로드"}</button></div></div>
     {notice && <div className={`notice ${notice.includes("문제가") || notice.includes("기본 구성") ? "warning" : "success"}`}>{notice}</div>}
-    <div className="preview-workspace"><div className="slide-rail">{slides.map((item, index) => <button className={slide === index ? "selected" : ""} onClick={() => setSlide(index)} key={index}><span>{index + 1}</span><div style={{ background: p.background, color: p.text }}>{index === 0 ? profile.artistName || "ARTIST" : ["", "ABOUT", "STRENGTHS", "WORK", "CONTACT"][index]}</div></button>)}</div><div className="canvas-wrap"><div className="slide-canvas" style={{ background: slide === 1 || slide === 3 ? p.surface : p.background, color: p.text, "--accent": p.accent, "--muted": p.muted } as React.CSSProperties}>{slides[slide]}</div><div className="canvas-controls"><button onClick={() => setSlide(Math.max(0, slide - 1))}><ArrowLeft /></button><span>{slide + 1} / {slides.length}</span><button onClick={() => setSlide(Math.min(slides.length - 1, slide + 1))}><ArrowRight /></button></div></div></div>
+    <div className="preview-workspace"><div className="slide-rail">{visibleSlides.map((item, index) => { const plan = plans[index]; const image = plan?.imageRefs[0] ? getDeckAssetData(profile, plan.imageRefs[0]) : ""; return <button className={slide === index ? "selected" : ""} onClick={() => setSlide(index)} key={index}><span>{index + 1}</span><div style={{ background: image ? `linear-gradient(#0007,#0007),url(${image}) center/cover` : p.background, color: p.text }}>{plan?.title || profile.artistName || "ARTIST"}</div></button>; })}</div><div className="canvas-wrap"><div className="slide-canvas ai-plan-canvas" style={{ background: slide % 2 ? p.surface : p.background, color: p.text, "--accent": p.accent, "--muted": p.muted } as React.CSSProperties}>{visibleSlides[slide]}</div>{activePlan?.imagePurpose && <small className="image-purpose">사진 역할 · {activePlan.imagePurpose}</small>}<div className="canvas-controls"><button onClick={() => setSlide(Math.max(0, slide - 1))}><ArrowLeft /></button><span>{slide + 1} / {visibleSlides.length}</span><button onClick={() => setSlide(Math.min(visibleSlides.length - 1, slide + 1))}><ArrowRight /></button></div></div></div>
     <div className="completion-grid"><article><CheckCircle2 /><div><strong>수정 가능한 PPTX</strong><p>텍스트와 도형을 파워포인트에서 직접 편집할 수 있어요.</p></div></article><article><LayoutTemplate /><div><strong>{template.name}</strong><p>{profile.pageCount}페이지 구성에 맞춰 자동 배치됩니다.</p></div></article><article><RotateCcw /><div><strong>초안 자동 저장</strong><p>브라우저에서 언제든 이어서 수정할 수 있어요.</p></div></article></div></section>;
 }
