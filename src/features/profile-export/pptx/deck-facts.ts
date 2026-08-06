@@ -20,7 +20,7 @@ function shortenAtWord(value: string, max: number) {
   return `${candidate.slice(0, breakAt > max * 0.6 ? breakAt : max - 1).trim()}…`;
 }
 
-export function formatCareerFact(fact: DeckFact) {
+export function formatCareerFact(fact: DeckFact, compact = false) {
   const datePattern = /(?:19|20)\d{2}(?:[.\-/년월일\s]\d{1,2})*/g;
   const title = fact.title
     .replace(datePattern, "")
@@ -32,8 +32,8 @@ export function formatCareerFact(fact: DeckFact) {
   const showOrganization = organization && !title.replace(/\s/g, "").includes(organization.replace(/\s/g, ""));
   return {
     date: fact.date.replace(/\s+/g, " ").trim() || "—",
-    title: shortenAtWord(title || fact.title.trim(), 40),
-    meta: shortenAtWord([showOrganization ? organization : "", fact.pageNumber ? `원문 ${fact.pageNumber}p` : ""].filter(Boolean).join(" · "), 48),
+    title: shortenAtWord(title || fact.title.trim(), compact ? 28 : 40),
+    meta: shortenAtWord([showOrganization ? organization : "", fact.pageNumber ? `원문 ${fact.pageNumber}p` : ""].filter(Boolean).join(" · "), compact ? 28 : 48),
   };
 }
 

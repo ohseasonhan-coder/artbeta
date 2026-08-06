@@ -117,11 +117,11 @@ export async function POST(request: Request) {
     const assets = (body.assets ?? []).slice(0, 10);
     const requestedPageCount = Math.max(4, Math.min(16, Number(body.profile.requestedPageCount) || 6));
     const facts = Array.isArray(body.profile.careers) ? body.profile.careers as Array<{ index?: number; category?: string }> : [];
-    const requiredCareerSlides = Math.max(1, Math.ceil(facts.length / 5));
+    const requiredCareerSlides = Math.max(1, Math.ceil(facts.length / 10));
     const requiredGallerySlides = Math.max(1, Math.ceil(Math.max(0, assets.length - 2) / 3));
     const targetPageCount = Math.min(20, Math.max(requestedPageCount, 4 + requiredCareerSlides + requiredGallerySlides));
     const parts: Part[] = [{
-      text: `당신은 Gamma 수준의 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 아래 사실과 이미지 후보만 사용해 편집 가능한 PPT의 최종 슬라이드 기획을 만드세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 현장 경쟁력, 검증된 활동을 빠르게 이해하고 마지막 장에서 바로 섭외 문의를 하게 만듭니다.\n\n중요: careers는 직접 입력한 경력과 PDF에서 추출해 제외하지 않은 수상·공연·활동·언론 사실을 합친 전체 근거입니다. 모든 인덱스를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 강점을 구체화하는 근거로만 사용하세요.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- gallery 슬라이드는 최소 ${requiredGallerySlides}장입니다. 사진이 부족해도 gallery를 삭제하지 말고 imagePurpose에 필요한 사진을 '공연 전경 / 관객 반응 / 연주·작품 디테일'처럼 구체적으로 적습니다.\n- career 슬라이드는 최소 ${requiredCareerSlides}장이며 한 장당 최대 5개입니다. careers의 0~${Math.max(0, facts.length - 1)} 인덱스를 중복·누락 없이 careerIndexes에 담습니다.\n- 같은 주장, 소개, 수식어를 다른 페이지에서 반복하지 않습니다. 이미 말한 내용은 삭제하고 다음 근거로 넘어갑니다.\n- 한 문장은 한 가지 정보만 전달합니다. 추상적인 홍보 문구보다 실제 분야·활동·기관·무대를 우선합니다.\n- 제목은 ABOUT, HISTORY 같은 분류명이 아니라 페이지의 결론을 짧게 씁니다.\n- 표지는 활동명과 한 줄 태그라인만 둡니다.\n- 사진은 배경이나 full bleed로 쓰지 않고 독립 프레임 안에 원본 비율로 배치합니다. 같은 이미지는 한 번만 사용합니다.\n- 경력은 careerIndexes로만 연결하며 사실을 만들거나 과장하지 않습니다.\n- contact는 '공연·행사 섭외를 문의해 주세요'처럼 행동을 요청하는 제목, 활동 분야·목적·지역 한 줄, 실제 연락처와 링크만 담습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음\n- career: title 32자, body·bullets 없음, 근거 최대 5개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
+      text: `당신은 Gamma 수준의 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 아래 사실과 이미지 후보만 사용해 편집 가능한 PPT의 최종 슬라이드 기획을 만드세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 현장 경쟁력, 검증된 활동을 빠르게 이해하고 마지막 장에서 바로 섭외 문의를 하게 만듭니다.\n\n중요: careers는 직접 입력한 경력과 PDF에서 추출해 제외하지 않은 수상·공연·활동·언론 사실을 합친 전체 근거입니다. 모든 인덱스를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 강점을 구체화하는 근거로만 사용하세요.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- gallery 슬라이드는 최소 ${requiredGallerySlides}장입니다. 사진이 부족해도 gallery를 삭제하지 말고 imagePurpose에 필요한 사진을 '공연 전경 / 관객 반응 / 연주·작품 디테일'처럼 구체적으로 적습니다.\n- career 슬라이드는 최소 ${requiredCareerSlides}장이며 한 장당 최대 10개입니다. 5개 이하는 1열, 6~10개는 2열로 배치됩니다. careers의 0~${Math.max(0, facts.length - 1)} 인덱스를 중복·누락 없이 careerIndexes에 담습니다.\n- 같은 주장, 소개, 수식어를 다른 페이지에서 반복하지 않습니다. 이미 말한 내용은 삭제하고 다음 근거로 넘어갑니다.\n- 한 문장은 한 가지 정보만 전달합니다. 추상적인 홍보 문구보다 실제 분야·활동·기관·무대를 우선합니다.\n- 제목은 ABOUT, HISTORY 같은 분류명이 아니라 페이지의 결론을 짧게 씁니다.\n- 표지는 활동명과 한 줄 태그라인만 둡니다.\n- 사진은 배경이나 full bleed로 쓰지 않고 독립 프레임 안에 원본 비율로 배치합니다. 같은 이미지는 한 번만 사용합니다.\n- 경력은 careerIndexes로만 연결하며 사실을 만들거나 과장하지 않습니다.\n- contact는 '공연·행사 섭외를 문의해 주세요'처럼 행동을 요청하는 제목, 활동 분야·목적·지역 한 줄, 실제 연락처와 링크만 담습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음\n- career: title 32자, body·bullets 없음, 근거 최대 10개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
     }];
 
     assets.forEach((asset) => {
@@ -161,6 +161,8 @@ export async function POST(request: Request) {
       plan.slides.splice(plan.slides.length - 1, 0, { type: "gallery", eyebrow: "ON STAGE", title: gallerySlides.length ? "무대 밖에서도 이어지는 현장감" : "한눈에 확인하는 공연의 현장감", body: "", bullets: [], imageRefs: [], imagePurpose: "공연 전경 / 관객 반응 / 연주·작품·의상 디테일", careerIndexes: [], layout: "gallery" });
       gallerySlides = plan.slides.filter((slide) => slide.type === "gallery");
     }
+    let careerCount = 0;
+    plan.slides = plan.slides.filter((slide) => slide.type !== "career" || careerCount++ < requiredCareerSlides);
     let careerSlides = plan.slides.filter((slide) => slide.type === "career");
     while (careerSlides.length < requiredCareerSlides) {
       const careerSlide = { type: "career" as const, eyebrow: "VERIFIED PROFILE", title: "문서로 확인된 주요 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "timeline" as const };
@@ -178,7 +180,7 @@ export async function POST(request: Request) {
       career: ["지속적으로 이어온 주요 경력", "다음 활동으로 연결된 이력"],
     };
     careerSlides.forEach((slide, index) => {
-      const indexes = factIndexes.slice(index * 5, index * 5 + 5);
+      const indexes = factIndexes.slice(index * 10, index * 10 + 10);
       const categories = new Set(indexes.map((factIndex) => facts[factIndex]?.category));
       slide.careerIndexes = indexes;
       slide.eyebrow = categories.has("award") ? "AWARDS & RECOGNITION" : categories.has("performance") ? "SELECTED ACTIVITIES" : categories.has("media") ? "MEDIA & PRESS" : "SELECTED HISTORY";
@@ -231,7 +233,7 @@ export async function POST(request: Request) {
         seenCopy.add(key);
         return true;
       });
-      slide.careerIndexes = [...new Set(slide.careerIndexes)].filter((index) => index < facts.length).slice(0, 5);
+      slide.careerIndexes = [...new Set(slide.careerIndexes)].filter((index) => index < facts.length).slice(0, 10);
     });
     plan.slides = plan.slides.flatMap(paginateSlide);
     const coveredIndexes = new Set(plan.slides.flatMap((slide) => slide.type === "career" ? slide.careerIndexes : []));

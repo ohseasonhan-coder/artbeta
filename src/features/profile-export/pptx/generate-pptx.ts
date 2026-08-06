@@ -103,7 +103,7 @@ function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
     title: compactText(slide.title, slide.imageRefs.length && ["about", "contact"].includes(slide.type) ? Math.min(title, 22) : title),
     body: compactText(slide.body, body),
     bullets: slide.bullets.slice(0, bulletCount).map((item) => compactText(item, bulletLength)),
-    careerIndexes: slide.careerIndexes.slice(0, 5),
+    careerIndexes: slide.careerIndexes.slice(0, 10),
     imageRefs: slide.imageRefs.slice(0, 3),
   };
 }
@@ -147,8 +147,8 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     });
   });
   const careerIndexes = deckFacts.map((_, index) => index);
-  for (let index = 0; index < Math.max(1, careerIndexes.length); index += 5) {
-    slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: index ? "이어지는 주요 활동" : "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: careerIndexes.slice(index, index + 5), layout: "timeline" });
+  for (let index = 0; index < Math.max(1, careerIndexes.length); index += 10) {
+    slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: index ? "이어지는 주요 활동" : "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: careerIndexes.slice(index, index + 10), layout: "timeline" });
   }
   const contact: DeckSlidePlan = {
     type: "contact",
@@ -291,14 +291,24 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     if (slidePlan.type === "career") {
       addEyebrow(slide, slidePlan.eyebrow);
       slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
-      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 5);
+      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 10);
+      const twoColumns = selected.length > 5;
+      const perColumn = Math.ceil(selected.length / 2);
+      const longestTitle = Math.max(0, ...selected.map((item) => formatCareerFact(item, twoColumns).title.length));
+      const titleFontSize = twoColumns ? longestTitle > 24 || selected.length > 8 ? 11.5 : 13 : longestTitle > 34 ? 14 : 16;
       selected.forEach((item, index) => {
-        const display = formatCareerFact(item);
-        const y = 2.02 + index * 0.9;
-        slide.addText(display.date, { x: 0.82, y, w: 1.25, h: 0.32, fontSize: 16, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addText(display.title, { x: 2.25, y: y - 0.03, w: 10.05, h: 0.44, fontSize: 16, bold: true, color: hex(p.text), margin: 0, breakLine: false });
-        if (display.meta) slide.addText(display.meta, { x: 2.25, y: y + 0.47, w: 10.05, h: 0.3, fontSize: 12, color: hex(p.muted), margin: 0, breakLine: false });
-        slide.addShape(pptx.ShapeType.line, { x: 2.25, y: y + 0.78, w: 10.1, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
+        const display = formatCareerFact(item, twoColumns);
+        const column = twoColumns ? Math.floor(index / perColumn) : 0;
+        const row = twoColumns ? index % perColumn : index;
+        const x = twoColumns ? 0.82 + column * 6.15 : 0.82;
+        const y = twoColumns ? 2.02 + row * 0.9 : 2.02 + row * 0.9;
+        const dateWidth = twoColumns ? 0.72 : 1.25;
+        const textX = x + (twoColumns ? 0.88 : 1.43);
+        const textWidth = twoColumns ? 4.92 : 10.05;
+        slide.addText(display.date, { x, y, w: dateWidth, h: 0.32, fontSize: twoColumns ? 11 : 16, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addText(display.title, { x: textX, y: y - 0.03, w: textWidth, h: 0.4, fontSize: titleFontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
+        if (display.meta) slide.addText(display.meta, { x: textX, y: y + 0.43, w: textWidth, h: 0.27, fontSize: twoColumns ? 9 : 12, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
+        slide.addShape(pptx.ShapeType.line, { x: textX, y: y + 0.75, w: textWidth, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
       return;
