@@ -48,11 +48,8 @@ export interface DeckExportResult {
 export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   const assets: VisualAsset[] = [];
   if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", dataUrl: profile.representativeImage });
-  const categoryOrder = { activity: 0, poster: 1, history: 2 } as const;
   profile.performanceImages
-    .map((dataUrl, index) => ({ dataUrl, index, category: profile.performanceImageCategories?.[index] ?? "activity" }))
-    .sort((a, b) => categoryOrder[a.category] - categoryOrder[b.category])
-    .forEach(({ dataUrl, index }) => assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }));
+    .forEach((dataUrl, index) => { if (dataUrl) assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }); });
   (profile.externalImages ?? []).forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
   profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => assets.push({ id: `pdf-page-${page.pageNumber}`, kind: "pdf_page", pageNumber: page.pageNumber, dataUrl: page.previewDataUrl }));
   return assets;

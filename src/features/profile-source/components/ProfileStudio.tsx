@@ -73,18 +73,16 @@ const strengths = ["전문적인 실력", "관객과의 소통", "밝고 즐거�
 const experiences = ["기업행사", "공공기관 행사", "지역축제", "학교 행사", "문화재단 공연", "거리공연", "방송·미디어", "해외공연", "아직 공식 경력은 많지 않음"];
 const impressions = ["실력이 뛰어나다", "믿을 수 있다", "행사를 잘 이해한다", "관객 반응이 좋다", "밝고 친근하다", "고급스럽다", "독창적이다", "전통성이 있다", "급한 일정에도 대응할 수 있다"];
 const steps = ["시작", "자료 준비", "프로필 정보", "콘텐츠", "디자인", "완성"];
-const photoCategoryGuides: Array<{ key: ProfileImageCategory; title: string; description: string; max: number }> = [
-  { key: "activity", title: "활동 사진", description: "공연·전시 전경, 관객 반응, 작업 또는 연주 장면", max: 4 },
-  { key: "poster", title: "포스터·홍보물", description: "대표 공연·전시 포스터, 행사 공식 홍보 이미지", max: 2 },
-  { key: "history", title: "연혁·수상·보도 자료", description: "수상 증빙, 주요 연혁, 기사·프로그램북 이미지", max: 2 },
+const photoMenuGuides: Array<{ number: number; title: string; description: string; category?: ProfileImageCategory }> = [
+  { number: 1, title: "대표사진", description: "표지에 사용할 얼굴과 분위기가 선명한 세로 사진" },
+  { number: 2, title: "주요 활동사진", description: "가장 대표적인 공연·전시·창작 활동 장면", category: "activity" },
+  { number: 3, title: "공연·전시 전경", description: "무대 규모와 전체 구성이 보이는 가로 사진", category: "activity" },
+  { number: 4, title: "관객·현장 반응", description: "관객 호응과 현장 분위기가 함께 보이는 사진", category: "activity" },
+  { number: 5, title: "포스터·홍보물", description: "대표 공연·전시의 공식 포스터 또는 홍보 이미지", category: "poster" },
+  { number: 6, title: "연혁 자료", description: "주요 활동 흐름을 보여주는 연혁·프로그램북 이미지", category: "history" },
+  { number: 7, title: "수상·보도 자료", description: "수상 증빙, 언론 기사 또는 공식 선정 자료", category: "history" },
+  { number: 8, title: "디테일·추가 활동사진", description: "연주·작품·의상 디테일 또는 다른 대표 활동", category: "activity" },
 ];
-
-function getPerformanceImageCategory(categories: ProfileImageCategory[] | undefined, index: number): ProfileImageCategory {
-  if (categories?.[index]) return categories[index];
-  if (index < 4) return "activity";
-  if (index < 6) return "poster";
-  return "history";
-}
 
 function normalizeField(value: string) {
   const keywordMap: Array<[string, string]> = [
@@ -247,7 +245,7 @@ export default function ProfileStudio() {
     } finally { clearInterval(timer); setBusy(false); }
   };
 
-  const uploadImage = (event: ChangeEvent<HTMLInputElement>, representative = false, category: ProfileImageCategory = "activity") => {
+  const uploadImage = (event: ChangeEvent<HTMLInputElement>, representative = false, category: ProfileImageCategory = "activity", targetIndex?: number) => {
     const files = Array.from(event.target.files || []);
     event.target.value = "";
     files.forEach((file) => {
@@ -257,15 +255,20 @@ export default function ProfileStudio() {
         const value = String(reader.result);
         if (representative) update("representativeImage", value);
         else setProfile((current) => {
-          const categories = current.performanceImages.map((_, index) => getPerformanceImageCategory(current.performanceImageCategories, index));
-          const categoryLimit = photoCategoryGuides.find((guide) => guide.key === category)?.max ?? FILE_LIMITS.maxPerformanceImages;
-          const categoryCount = current.performanceImages.filter((_, index) => categories[index] === category).length;
-          const totalCount = current.performanceImages.length + (current.externalImages?.length ?? 0);
-          if (categoryCount >= categoryLimit || totalCount >= FILE_LIMITS.maxPerformanceImages) return current;
+          const images = [...current.performanceImages];
+          const categories = [...(current.performanceImageCategories ?? [])];
+          const index = targetIndex ?? images.length;
+          const replacing = Boolean(images[index]);
+          const totalCount = images.filter(Boolean).length + (current.externalImages?.length ?? 0);
+          if (!replacing && totalCount >= FILE_LIMITS.maxPerformanceImages) return current;
+          while (images.length <= index) images.push("");
+          while (categories.length <= index) categories.push("activity");
+          images[index] = value;
+          categories[index] = category;
           return {
             ...current,
-            performanceImages: [...current.performanceImages, value],
-            performanceImageCategories: [...categories, category],
+            performanceImages: images,
+            performanceImageCategories: categories,
           };
         });
       };
@@ -423,7 +426,7 @@ function ContentStep({ profile, update, busy, generate, notice }: { profile: Pro
   </section>;
 }
 
-function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; uploadImage: (event: ChangeEvent<HTMLInputElement>, representative?: boolean, category?: ProfileImageCategory) => void }) {
+function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void; uploadImage: (event: ChangeEvent<HTMLInputElement>, representative?: boolean, category?: ProfileImageCategory, targetIndex?: number) => void }) {
   const [searching, setSearching] = useState(false);
   const [searchNotice, setSearchNotice] = useState("");
   const [candidates, setCandidates] = useState<WebImageCandidate[]>([]);
@@ -463,7 +466,7 @@ function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; up
 
   const addExternalImage = (candidate: WebImageCandidate) => {
     if (externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)) return;
-    if (profile.performanceImages.length + externalImages.length >= FILE_LIMITS.maxPerformanceImages) {
+    if (profile.performanceImages.filter(Boolean).length + externalImages.length >= FILE_LIMITS.maxPerformanceImages) {
       setSearchNotice(`공연·웹 사진은 합쳐서 최대 ${FILE_LIMITS.maxPerformanceImages}장까지 추가할 수 있어요.`);
       return;
     }
@@ -471,24 +474,31 @@ function DesignStep({ profile, update, uploadImage }: { profile: ProfileData; up
   };
 
   const addPdfAsset = (dataUrl: string) => {
-    if (profile.performanceImages.includes(dataUrl) || profile.performanceImages.length + externalImages.length >= FILE_LIMITS.maxPerformanceImages) return;
-    const normalizedCategories = profile.performanceImages.map((_, index) => getPerformanceImageCategory(profile.performanceImageCategories, index));
-    if (normalizedCategories.filter((category) => category === "history").length >= 2) return;
-    update("performanceImages", [...profile.performanceImages, dataUrl]);
-    update("performanceImageCategories", [...normalizedCategories, "history"]);
+    if (profile.performanceImages.includes(dataUrl) || profile.performanceImages.filter(Boolean).length + externalImages.length >= FILE_LIMITS.maxPerformanceImages) return;
+    const preferredIndexes = [4, 5, 6, 0, 1, 2, 3];
+    const targetIndex = preferredIndexes.find((index) => !profile.performanceImages[index]);
+    if (targetIndex === undefined) return;
+    const images = [...profile.performanceImages];
+    const categories = [...(profile.performanceImageCategories ?? [])];
+    while (images.length <= targetIndex) images.push("");
+    while (categories.length <= targetIndex) categories.push("activity");
+    images[targetIndex] = dataUrl;
+    categories[targetIndex] = "history";
+    update("performanceImages", images);
+    update("performanceImageCategories", categories);
   };
 
   const removePerformanceImage = (targetIndex: number) => {
-    const normalizedCategories = profile.performanceImages.map((_, index) => getPerformanceImageCategory(profile.performanceImageCategories, index));
-    update("performanceImages", profile.performanceImages.filter((_, index) => index !== targetIndex));
-    update("performanceImageCategories", normalizedCategories.filter((_, index) => index !== targetIndex));
+    const images = [...profile.performanceImages];
+    images[targetIndex] = "";
+    update("performanceImages", images);
   };
 
   return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>모든 사진은 배경으로 늘리지 않고 원본 비율을 유지한 독립 프레임으로 PPT에 배치합니다.</p></div>
     {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF에서 선택한 자산</h2><p>원본 페이지 이미지를 대표 사진이나 연혁 자료로 가져올 수 있어요.</p></div></div><div className="selected-pdf-assets">{profile.pdfPageAssets.filter((asset) => asset.selected).map((asset) => <article key={asset.pageNumber}><img src={asset.previewDataUrl} alt={`선택한 PDF ${asset.pageNumber}페이지`} /><strong>{asset.pageNumber}페이지</strong><div><button onClick={() => update("representativeImage", asset.previewDataUrl)}>대표 이미지</button><button onClick={() => addPdfAsset(asset.previewDataUrl)}>연혁 자료 추가</button></div></article>)}</div></div>}
-    <div className="form-card"><div className="card-heading"><div><h2>대표 사진</h2><p>표지와 소개 페이지에 비율을 유지해 삽입되는 기준 사진입니다.</p></div>{profile.representativeImage && <button disabled={searching || !profile.artistName} onClick={() => void searchArtistImages()}>{searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />} 웹에서 관련 사진 찾기</button>}</div><div className="media-grid"><label className="image-upload">{profile.representativeImage ? <img src={profile.representativeImage} alt="대표 사진" /> : <><ImagePlus /><strong>대표 사진 올리기</strong><small>JPG, PNG · 최대 12MB</small></>}<input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} /></label><div className="photo-tip"><Sparkles /><strong>대표사진을 검색 기준으로 사용합니다</strong><p>검색 제목·출처·활동 분야와 사진 구도를 비교합니다. 얼굴만으로 동일인을 자동 확정하지 않으며 최종 선택은 직접 확인할 수 있어요.</p></div></div></div>
+    <div className="form-card numbered-photo-card"><div className="card-heading"><div><h2>PPT 사진 메뉴</h2><p>사진마다 사용할 위치와 역할을 정했습니다. 각 메뉴에 한 장씩 선택해 주세요.</p></div><span className="photo-total-count">{(profile.representativeImage ? 1 : 0) + profile.performanceImages.slice(0, 7).filter(Boolean).length} / 8장</span></div><div className="numbered-photo-list">{photoMenuGuides.map((guide) => { const image = guide.number === 1 ? profile.representativeImage : profile.performanceImages[guide.number - 2]; return <article className={image ? "filled" : ""} key={guide.number}><span className="photo-menu-number">사진 {guide.number}</span><div className="photo-menu-copy"><strong>{guide.title}</strong><p>{guide.description}</p>{guide.number === 1 && <small>웹 사진 검색 시 인물 비교의 기준으로도 사용됩니다.</small>}</div><label className="photo-menu-upload">{image ? <img src={image} alt={`사진 ${guide.number} ${guide.title}`} /> : <><ImagePlus size={20} /><span>사진 선택</span></>}<input type="file" accept="image/*" onChange={(event) => uploadImage(event, guide.number === 1, guide.category ?? "activity", guide.number === 1 ? undefined : guide.number - 2)} /></label><div className="photo-menu-actions">{image && <><label>교체<input type="file" accept="image/*" onChange={(event) => uploadImage(event, guide.number === 1, guide.category ?? "activity", guide.number === 1 ? undefined : guide.number - 2)} /></label><button aria-label={`${guide.title} 삭제`} onClick={() => guide.number === 1 ? update("representativeImage", undefined) : removePerformanceImage(guide.number - 2)}><X size={14} /> 삭제</button></>}{guide.number === 1 && profile.representativeImage && <button className="photo-search-action" disabled={searching || !profile.artistName} onClick={() => void searchArtistImages()}>{searching ? <Loader2 className="spin" size={14} /> : <Search size={14} />} 웹에서 관련 사진 찾기</button>}</div></article>; })}</div>{profile.performanceImages.slice(7).filter(Boolean).length > 0 && <div className="legacy-photo-note">기존에 추가한 나머지 사진 {profile.performanceImages.slice(7).filter(Boolean).length}장은 PPT 자산으로 그대로 유지됩니다.</div>}</div>
     {(searchNotice || candidates.length > 0) && <div className="form-card web-image-review"><div className="card-heading"><div><h2>웹 이미지 후보 검토</h2><p>{searchNotice}</p></div><span>{candidates.filter((candidate) => candidate.recommended).length}개 추천</span></div>{candidates.length > 0 && <div className="web-image-grid">{candidates.map((candidate) => { const added = externalImages.some((image) => image.sourceUrl === candidate.sourceUrl); return <article className={candidate.recommended ? "recommended" : ""} key={candidate.id}><div className="web-image-frame"><img src={candidate.dataUrl} alt={candidate.title} /></div><div className="web-image-meta"><span>{candidate.source.toUpperCase()} · 관련도 {Math.round(candidate.relevanceScore * 100)} · 품질 {Math.round(candidate.qualityScore * 100)}</span><strong>{candidate.title}</strong><p>{candidate.reason}</p><div><a href={candidate.sourceUrl} target="_blank" rel="noreferrer">출처 확인</a><button disabled={added} onClick={() => addExternalImage(candidate)}>{added ? "추가됨" : "PPT 사진으로 추가"}</button></div></div></article>; })}</div>}</div>}
-    <div className="form-card categorized-photo-card"><div className="card-heading"><div><h2>활동 자료 사진</h2><p>자료의 역할별로 총 8장을 채워 주세요. 균형 있게 올릴수록 PPT의 설득력이 좋아집니다.</p></div><span className="photo-total-count">{profile.performanceImages.length + externalImages.length} / {FILE_LIMITS.maxPerformanceImages}장</span></div><div className="photo-category-grid">{photoCategoryGuides.map((guide) => { const images = profile.performanceImages.map((image, index) => ({ image, index })).filter(({ index }) => getPerformanceImageCategory(profile.performanceImageCategories, index) === guide.key); return <article className="photo-category" key={guide.key}><div className="photo-category-heading"><div><strong>{guide.title}</strong><p>{guide.description}</p></div><span>{images.length} / {guide.max}</span></div><div className={`photo-category-slots slots-${guide.max}`}>{Array.from({ length: guide.max }, (_, slotIndex) => { const item = images[slotIndex]; return item ? <div className="photo-category-image" key={item.index}><img src={item.image} alt={`${guide.title} ${slotIndex + 1}`} /><button aria-label={`${guide.title} 사진 삭제`} onClick={() => removePerformanceImage(item.index)}><X size={13} /></button></div> : <label className="photo-category-empty" key={slotIndex}><Plus size={15} /><span>{guide.title}<br />추가</span><input type="file" accept="image/*" onChange={(event) => uploadImage(event, false, guide.key)} /></label>; })}</div>{images.length < guide.max && <label className="category-multi-upload"><Upload size={14} /> 여러 장 선택<input type="file" accept="image/*" multiple onChange={(event) => uploadImage(event, false, guide.key)} /></label>}</article>; })}</div>{externalImages.length > 0 && <div className="web-photo-section"><strong>웹에서 추가한 사진</strong><div className="external-image-list">{externalImages.map((image) => <article key={image.id}><img src={image.dataUrl} alt={image.title} /><div><strong>{image.title}</strong><a href={image.sourceUrl} target="_blank" rel="noreferrer">{image.source.toUpperCase()} 출처</a></div><button aria-label="웹 이미지 삭제" onClick={() => update("externalImages", externalImages.filter((target) => target.id !== image.id))}><X size={14} /></button></article>)}</div></div>}{profile.performanceImages.length === 0 && externalImages.length === 0 && <div className="photo-category-tip"><Sparkles size={17} /><span><strong>무엇부터 올릴지 모르겠다면</strong> 활동 사진 2장 → 포스터 1장 → 연혁·수상 자료 1장 순서로 시작해 보세요.</span></div>}</div>
+    {externalImages.length > 0 && <div className="form-card web-photo-section"><div className="card-heading"><div><h2>웹에서 추가한 사진</h2><p>출처를 확인한 웹 이미지는 PPT의 빈 이미지 영역에 추가로 배치됩니다.</p></div></div><div className="external-image-list">{externalImages.map((image) => <article key={image.id}><img src={image.dataUrl} alt={image.title} /><div><strong>{image.title}</strong><a href={image.sourceUrl} target="_blank" rel="noreferrer">{image.source.toUpperCase()} 출처</a></div><button aria-label="웹 이미지 삭제" onClick={() => update("externalImages", externalImages.filter((target) => target.id !== image.id))}><X size={14} /></button></article>)}</div></div>}
     <div className="form-card photo-placement-card"><div className="card-heading"><div><h2>PPT 페이지별 사진 배치</h2><p>현재 선택한 사진이 들어갈 위치와 아직 필요한 사진을 미리 확인할 수 있어요.</p></div></div><div className="photo-placement-grid">{photoPlacements.map((placement) => <article key={placement.page}><div><strong>{placement.page}</strong><p>{placement.guide}</p></div><div className={`photo-placement-slots slots-${placement.slots}`}>{Array.from({ length: placement.slots }, (_, index) => placement.assets[index] ? <img src={placement.assets[index].dataUrl} alt={`${placement.page} 배치 사진 ${index + 1}`} key={placement.assets[index].id} /> : <span key={index}>사진 필요</span>)}</div></article>)}</div><small>강점·주요 경력·연락 페이지는 가독성을 위해 사진 없이 텍스트 중심으로 구성합니다.</small></div>
     <div className="form-card"><div className="card-heading"><div><h2>디자인 템플릿</h2><p>활동 분야와 제출 목적에 어울리는 디자인을 골라보세요.</p></div></div><div className="template-grid">{designTemplates.map((item) => <button key={item.key} className={`template-card ${profile.templateKey === item.key ? "selected" : ""}`} onClick={() => update("templateKey", item.key)}><div className="template-art" style={{ background: item.palette.background, color: item.palette.text }}><span style={{ color: item.palette.accent }}>ARTIST</span><strong>PORT<br />FOLIO</strong><i style={{ background: item.palette.accent }} /></div><div><strong>{item.name}</strong><small>{item.description}</small></div>{profile.templateKey === item.key && <span className="template-check"><Check /></span>}</button>)}</div></div>
     <div className="form-card compact"><div className="form-grid"><label><span>페이지 수</span><select value={profile.pageCount} onChange={(event) => update("pageCount", Number(event.target.value))}><option value={4}>4페이지 · 핵심형</option><option value={6}>6페이지 · 기본형</option><option value={8}>8페이지 · 상세형</option><option value={10}>10페이지 · 포트폴리오형</option></select></label><label><span>프로필 목적</span><select value={profile.purpose} onChange={(event) => update("purpose", event.target.value)}><option>공공기관 제안</option><option>기업 행사 제안</option><option>축제 섭외</option><option>공연장 제출</option></select></label></div></div>
