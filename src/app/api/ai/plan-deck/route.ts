@@ -23,6 +23,25 @@ const planSchema = z.object({
   slides: z.array(slideSchema),
 });
 
+function describeGeminiFailure(error: unknown) {
+  const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = rawMessage.toLowerCase();
+  if (status === 401 || status === 403 || message.includes("api_key_invalid") || message.includes("api key not valid") || message.includes("permission_denied")) {
+    return { code: "GEMINI_AUTH_FAILED", status: 503, error: "Vercel의 Gemini API 키가 유효하지 않습니다. 환경변수 GEMINI_API_KEY를 로컬과 같은 키로 다시 저장한 뒤 재배포해 주세요." };
+  }
+  if (status === 429 || message.includes("resource_exhausted") || message.includes("quota")) {
+    return { code: "GEMINI_QUOTA_EXCEEDED", status: 503, error: "Gemini 무료 사용량 또는 호출 한도를 초과했습니다. 잠시 후 다시 시도하거나 API 사용량을 확인해 주세요." };
+  }
+  if (status === 404 || message.includes("not found") || message.includes("model") && message.includes("support")) {
+    return { code: "GEMINI_MODEL_NOT_AVAILABLE", status: 503, error: "설정된 Gemini 모델을 사용할 수 없습니다. Vercel의 GEMINI_MODEL 값을 확인해 주세요." };
+  }
+  if (error instanceof SyntaxError || error instanceof z.ZodError) {
+    return { code: "DECK_RESPONSE_INVALID", status: 502, error: "Gemini 응답 형식이 불완전했습니다. 다시 시도해 주세요." };
+  }
+  return { code: "DECK_PLANNING_FAILED", status: 502, error: "Gemini가 PPT 구성을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요." };
+}
+
 interface AssetInput {
   id: string;
   kind: "representative" | "performance" | "pdf_page";
@@ -119,18 +138,20 @@ export async function POST(request: Request) {
       },
     });
     const plan = planSchema.parse(JSON.parse(response.text || "{}"));
-    if (plan.slides.length !== targetPageCount) throw new Error("Gemini가 필요한 페이지 수를 지키지 않았습니다.");
-    if (plan.slides[0]?.type !== "cover" || plan.slides.at(-1)?.type !== "contact" || !plan.slides.some((slide) => slide.type === "career")) {
-      throw new Error("Gemini가 필수 슬라이드 구조를 지키지 않았습니다.");
+    if (plan.slides[0]?.type !== "cover") {
+      plan.slides.unshift({ type: "cover", eyebrow: "ARTIST PROFILE", title: String(body.profile.artistName || "ARTIST"), body: String(body.profile.tagline || ""), bullets: [], imageRefs: assets[0] ? [assets[0].id] : [], imagePurpose: "대표 이미지를 활용한 정체성 전달", careerIndexes: [], layout: "editorial" });
+    }
+    if (plan.slides.at(-1)?.type !== "contact") {
+      plan.slides.push({ type: "contact", eyebrow: "CONTACT", title: "다음 무대를 함께 만들겠습니다", body: [body.profile.contact, body.profile.videoUrl, body.profile.region].filter(Boolean).join(" · "), bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" });
     }
     let careerSlides = plan.slides.filter((slide) => slide.type === "career");
     while (careerSlides.length < requiredCareerSlides) {
       const candidate = plan.slides.findLast((slide, index) => index > 1 && index < plan.slides.length - 1 && slide.type !== "career");
-      if (!candidate) break;
-      Object.assign(candidate, { type: "career", eyebrow: "VERIFIED PROFILE", title: "문서로 확인된 주요 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "timeline" });
+      const careerSlide = { type: "career" as const, eyebrow: "VERIFIED PROFILE", title: "문서로 확인된 주요 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "timeline" as const };
+      if (candidate) Object.assign(candidate, careerSlide);
+      else plan.slides.splice(plan.slides.length - 1, 0, careerSlide);
       careerSlides = plan.slides.filter((slide) => slide.type === "career");
     }
-    if (careerSlides.length < requiredCareerSlides) throw new Error("추출 사실을 담을 경력 페이지가 부족합니다.");
 
     const categoryPriority: Record<string, number> = { award: 0, performance: 1, media: 2, career: 3 };
     const factIndexes = facts.map((fact, index) => ({ index, priority: categoryPriority[fact.category || "career"] ?? 3 })).sort((a, b) => a.priority - b.priority).map(({ index }) => index);
@@ -169,6 +190,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ plan, mode: "ai", provider: "Gemini", model: process.env.GEMINI_MODEL || "gemini-3.6-flash", qualityScore, coveredFactCount: coveredIndexes.size, totalFactCount: facts.length });
   } catch (error) {
     console.error("Gemini deck planning failed", error);
-    return NextResponse.json({ error: "Gemini가 PPT 구성을 완료하지 못했습니다.", code: "DECK_PLANNING_FAILED" }, { status: 502 });
+    const failure = describeGeminiFailure(error);
+    return NextResponse.json({ error: failure.error, code: failure.code }, { status: failure.status });
   }
 }

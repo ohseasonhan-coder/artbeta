@@ -169,7 +169,12 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
     requestedPageCount: profile.pageCount,
   };
   const response = await fetch("/api/ai/plan-deck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: profileFacts, assets: thumbnails }) });
-  if (!response.ok) throw new Error("AI PPT 기획을 불러오지 못했습니다.");
+  if (!response.ok) {
+    const details = await response.json().catch(() => null) as { error?: string; code?: string } | null;
+    const error = new Error(details?.error || "AI PPT 기획을 불러오지 못했습니다.") as Error & { code?: string };
+    error.code = details?.code;
+    throw error;
+  }
   return response.json() as Promise<{ plan: DeckPlan; mode: "ai"; provider: string; model: string; qualityScore?: number; coveredFactCount?: number; totalFactCount?: number }>;
 }
 
@@ -178,8 +183,18 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
   try {
     const result = await requestDeckPlan(profile, assets);
     return { plan: { ...result.plan, slides: paginateSlideCopy(result.plan.slides).map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
-  } catch {
-    return { plan: fallbackPlan(profile, assets), meta: { mode: "local", provider: "기본 기획", model: "로컬" } };
+  } catch (error) {
+    const failure = error as Error & { code?: string };
+    return {
+      plan: fallbackPlan(profile, assets),
+      meta: {
+        mode: "local",
+        provider: "기본 기획",
+        model: "로컬",
+        warning: failure.message || "Gemini PPT 기획을 완료하지 못했습니다.",
+        errorCode: failure.code || "DECK_PLANNING_FAILED",
+      },
+    };
   }
 }
 

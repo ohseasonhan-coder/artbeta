@@ -77,6 +77,8 @@ export interface DeckPlanMeta {
   mode: "ai" | "local";
   provider: string;
   model: string;
+  warning?: string;
+  errorCode?: string;
   qualityScore?: number;
   coveredFactCount?: number;
   totalFactCount?: number;
