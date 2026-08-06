@@ -4,6 +4,25 @@ import { buildDeckFacts, formatCareerFact } from "./deck-facts";
 
 const hex = (value: string) => value.replace("#", "");
 
+export function normalizeVideoUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+export function isYouTubeVideoUrl(value: string) {
+  const normalized = normalizeVideoUrl(value);
+  if (!normalized) return false;
+  const hostname = new URL(normalized).hostname.replace(/^www\./, "");
+  return hostname === "youtube.com" || hostname.endsWith(".youtube.com") || hostname === "youtu.be";
+}
+
 const galleryPhotoGuides = [
   "공연 전경\n무대 규모와 전체 구성이 보이는 가로 사진",
   "관객 반응\n현장의 분위기와 호응이 보이는 사진",
@@ -322,11 +341,17 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       addEyebrow(slide, "BOOKING & CONTACT");
       slide.addText(slidePlan.title || "공연·행사 섭외를 문의해 주세요", { x: 0.78, y: 1.35, w: 8.9, h: 1.15, fontSize: 42, bold: true, color: hex(p.text), margin: 0 });
       slide.addText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), { x: 0.82, y: 2.85, w: 8.7, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0 });
-      const contacts = slidePlan.bullets.length ? slidePlan.bullets : [profile.contact || "연락 가능한 전화번호 또는 이메일을 입력해 주세요", profile.videoUrl].filter(Boolean);
-      contacts.slice(0, 2).forEach((item, index) => {
-        slide.addText(index ? "VIDEO / LINK" : "CONTACT", { x: 0.82, y: 4.05 + index * 0.95, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
-        slide.addText(item, { x: 2.25, y: 3.94 + index * 0.95, w: 9.7, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false });
-      });
+      const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "연락 가능한 전화번호 또는 이메일을 입력해 주세요";
+      const videoUrl = normalizeVideoUrl(profile.videoUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
+      slide.addText("CONTACT", { x: 0.82, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
+      slide.addText(contactText, { x: 2.25, y: 3.94, w: 9.7, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false });
+      if (videoUrl) {
+        const videoLabel = isYouTubeVideoUrl(videoUrl) ? "▶  YouTube 대표 영상 바로 보기" : "▶  대표 영상 바로 보기";
+        slide.addText("VIDEO", { x: 0.82, y: 5.14, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
+        slide.addShape(pptx.ShapeType.roundRect, { x: 2.25, y: 4.88, w: 4.25, h: 0.68, rectRadius: 0.08, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 }, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
+        slide.addText(videoLabel, { x: 2.55, y: 5.08, w: 3.72, h: 0.25, fontSize: 16, bold: true, color: "FFFFFF", margin: 0, align: "center", breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
+        slide.addText(compactText(videoUrl, 62), { x: 6.8, y: 5.05, w: 5.0, h: 0.28, fontSize: 11, color: hex(p.muted), margin: 0, breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" }, underline: { color: hex(p.muted) } });
+      }
       slide.addText("일정과 행사 정보를 보내주시면 맞춤 구성으로 답변드리겠습니다.", { x: 0.82, y: 6.48, w: 9.2, h: 0.35, fontSize: 14, color: hex(p.muted), margin: 0 });
       addFooter(slide, slideIndex + 1);
       return;
