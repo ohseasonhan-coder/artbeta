@@ -10,7 +10,7 @@ import { ExternalImageAsset, ExtractedItem, initialProfile, PdfPageAsset, Profil
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
 import { downloadPptx, getDeckAssetData, makeImageThumbnail, prepareDeckPlan } from "@/features/profile-export/pptx/generate-pptx";
-import { buildDeckFacts } from "@/features/profile-export/pptx/deck-facts";
+import { buildDeckFacts, formatCareerFact } from "@/features/profile-export/pptx/deck-facts";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
 import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
@@ -454,15 +454,20 @@ function PreviewStep({ profile, template, busy, notice, onEdit, onRetry, onDownl
   const p = template.palette;
   const plans = profile.deckPlan?.slides ?? [];
   const deckFacts = buildDeckFacts(profile);
+  const galleryGuides = ["공연 전경 · 무대 규모가 보이는 가로 사진", "관객 반응 · 현장 분위기가 보이는 사진", "디테일 컷 · 연주·작품·의상 근접 사진"];
   const slides = plans.map((plan, planIndex) => {
     const images = plan.imageRefs.map((id) => getDeckAssetData(profile, id)).filter((value): value is string => Boolean(value));
     const careers = plan.careerIndexes.map((index) => deckFacts[index]).filter(Boolean);
-    if (plan.type === "cover") return <div className={`ai-preview-slide ai-cover ${images[0] ? "has-image" : ""}`} key={planIndex}>{images[0] && <img src={images[0]} alt="표지" />}<div className="ai-image-shade" /><div className="ai-slide-copy"><span>{plan.eyebrow}</span><h1>{plan.title}</h1><p>{plan.body}</p><small>{profile.primaryField} · {profile.region}</small></div></div>;
-    if (plan.type === "gallery") return <div className="ai-preview-slide ai-gallery" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div className={`ai-gallery-grid count-${Math.min(3, images.length)}`}>{images.slice(0, 3).map((image, index) => <img src={image} alt={`공연 이미지 ${index + 1}`} key={index} />)}</div></div>;
+    if (plan.type === "cover") return <div className="ai-preview-slide ai-cover has-image" key={planIndex}>{images[0] ? <img src={images[0]} alt="표지" /> : <div className="ai-photo-placeholder cover"><strong>PHOTO NEEDED</strong><span>{plan.imagePurpose || "얼굴이 선명한 세로 대표사진 · 반신 또는 전신"}</span></div>}<div className="ai-image-shade" /><div className="ai-slide-copy"><span>{plan.eyebrow}</span><h1>{plan.title}</h1><p>{plan.body}</p><small>{profile.primaryField} · {profile.region}</small></div></div>;
+    if (plan.type === "gallery") return <div className="ai-preview-slide ai-gallery" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div className="ai-gallery-grid count-3">{galleryGuides.map((guide, index) => images[index] ? <img src={images[index]} alt={`공연 이미지 ${index + 1}`} key={guide} /> : <div className="ai-photo-placeholder" key={guide}><strong>PHOTO NEEDED</strong><span>{guide}</span></div>)}</div></div>;
     if (plan.type === "strengths") return <div className="ai-preview-slide ai-strengths" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div>{plan.bullets.slice(0, 3).map((item, index) => <article key={index}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>;
-    if (plan.type === "career") return <div className="ai-preview-slide ai-career" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{careers.slice(0, 5).map((item) => <div className="preview-career" key={item.id}><b>{item.date || "—"}</b><strong>{item.title}</strong><small>{[item.categoryLabel, item.organization, item.pageNumber ? `${item.pageNumber}p` : ""].filter(Boolean).join(" · ")}</small></div>)}</div>;
+    if (plan.type === "career") return <div className="ai-preview-slide ai-career" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{careers.slice(0, 5).map((item) => { const display = formatCareerFact(item); return <div className="preview-career" key={item.id}><b>{display.date}</b><strong>{display.title}</strong>{display.meta && <small>{display.meta}</small>}</div>; })}</div>;
+    if (plan.type === "contact") {
+      const contacts = plan.bullets.length ? plan.bullets : [profile.contact || "연락 가능한 전화번호 또는 이메일을 입력해 주세요", profile.videoUrl].filter(Boolean);
+      return <div className="ai-preview-slide ai-contact" key={planIndex}><span>BOOKING & CONTACT</span><h2>{plan.title || "공연·행사 섭외를 문의해 주세요"}</h2><p>{plan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · ")}</p><div>{contacts.slice(0, 2).map((item, index) => <article key={item}><small>{index ? "VIDEO / LINK" : "CONTACT"}</small><strong>{item}</strong></article>)}</div><em>일정과 행사 정보를 보내주시면 맞춤 구성으로 답변드리겠습니다.</em></div>;
+    }
     const imageOnLeft = plan.layout === "split_left";
-    return <div className={`ai-preview-slide ai-split ${images[0] ? "has-image" : ""} ${imageOnLeft ? "image-left" : "image-right"}`} key={planIndex}>{images[0] && <img src={images[0]} alt={plan.type === "contact" ? "연락 페이지 이미지" : "소개 이미지"} />}<div className="ai-slide-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><p>{plan.body}</p>{plan.bullets.length > 0 && <ul>{plan.bullets.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div></div>;
+    return <div className={`ai-preview-slide ai-split has-image ${imageOnLeft ? "image-left" : "image-right"}`} key={planIndex}>{images[0] ? <img src={images[0]} alt="소개 이미지" /> : <div className="ai-photo-placeholder split"><strong>PHOTO NEEDED</strong><span>{plan.imagePurpose || "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장"}</span></div>}<div className="ai-slide-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><p>{plan.body}</p>{plan.bullets.length > 0 && <ul>{plan.bullets.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div></div>;
   });
   const visibleSlides = slides.length ? slides : [<div className="ai-preview-slide ai-cover" key="empty"><div className="ai-slide-copy"><span>ARTIST PROFILE</span><h1>{profile.artistName}</h1><p>{profile.tagline}</p></div></div>];
   const activePlan = plans[slide];

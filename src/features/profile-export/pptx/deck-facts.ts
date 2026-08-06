@@ -13,6 +13,30 @@ export interface DeckFact {
   source: "profile" | "pdf";
 }
 
+function shortenAtWord(value: string, max: number) {
+  if (value.length <= max) return value;
+  const candidate = value.slice(0, max - 1);
+  const breakAt = candidate.lastIndexOf(" ");
+  return `${candidate.slice(0, breakAt > max * 0.6 ? breakAt : max - 1).trim()}…`;
+}
+
+export function formatCareerFact(fact: DeckFact) {
+  const datePattern = /(?:19|20)\d{2}(?:[.\-/년월일\s]\d{1,2})*/g;
+  const title = fact.title
+    .replace(datePattern, "")
+    .replace(/^(주요\s*)?(경력|공연|활동|수상|선정|방송|언론)\s*[:·|｜-]?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[-–—,.:·\s]+|[-–—,.:·\s]+$/g, "")
+    .trim();
+  const organization = fact.organization.replace(/\s+/g, " ").trim();
+  const showOrganization = organization && !title.replace(/\s/g, "").includes(organization.replace(/\s/g, ""));
+  return {
+    date: fact.date.replace(/\s+/g, " ").trim() || "—",
+    title: shortenAtWord(title || fact.title.trim(), 40),
+    meta: shortenAtWord([showOrganization ? organization : "", fact.pageNumber ? `원문 ${fact.pageNumber}p` : ""].filter(Boolean).join(" · "), 48),
+  };
+}
+
 const categoryLabels: Record<DeckFactCategory, string> = {
   career: "주요 경력",
   performance: "공연·활동",
