@@ -42,6 +42,16 @@ export interface PdfPageAsset {
   selected: boolean;
 }
 
+export interface ExternalImageAsset {
+  id: string;
+  dataUrl: string;
+  source: "naver" | "google" | "youtube";
+  sourceUrl: string;
+  title: string;
+  relevanceScore: number;
+  qualityScore: number;
+}
+
 export type DeckSlideType = "cover" | "about" | "strengths" | "gallery" | "career" | "contact";
 export type DeckLayout = "full_bleed" | "split_left" | "split_right" | "editorial" | "timeline" | "gallery";
 
@@ -95,6 +105,7 @@ export interface ProfileData {
   generatedStrengths: string[];
   representativeImage?: string;
   performanceImages: string[];
+  externalImages: ExternalImageAsset[];
   extractedItems: ExtractedItem[];
   pdfPageAssets: PdfPageAsset[];
   deckPlan?: DeckPlan;
@@ -123,6 +134,7 @@ export const initialProfile: ProfileData = {
   tagline: "",
   generatedStrengths: [],
   performanceImages: [],
+  externalImages: [],
   extractedItems: [],
   pdfPageAssets: [],
 };

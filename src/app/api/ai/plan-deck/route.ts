@@ -28,6 +28,8 @@ interface AssetInput {
   kind: "representative" | "performance" | "pdf_page";
   pageNumber?: number;
   dataUrl: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
 }
 
 const copyBudgets = {
@@ -60,13 +62,13 @@ export async function POST(request: Request) {
     const requiredCareerSlides = Math.max(1, Math.ceil(facts.length / 8));
     const targetPageCount = Math.min(16, Math.max(requestedPageCount, 5 + requiredCareerSlides));
     const parts: Part[] = [{
-      text: `당신은 Gamma 수준의 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 아래 사실과 이미지 후보만 사용해 편집 가능한 PPT의 최종 슬라이드 기획을 만드세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 무대 경쟁력, 검증된 활동, 섭외 방법을 짧은 시간에 이해하고 연락하게 만듭니다.\n\n중요: careers는 사용자가 직접 입력한 경력과 PDF에서 추출해 제외하지 않은 수상·공연·주요 활동·언론 사실을 합친 전체 근거 목록입니다. 일부만 골라 버리지 말고 모든 인덱스를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 페이지 텍스트도 소개·강점·제목을 구체화하는 근거로 사용하세요.\n\n구성 규칙:\n- 내용 누락을 막기 위해 요청 ${requestedPageCount}장보다 늘어난 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- career 슬라이드는 최소 ${requiredCareerSlides}장이며 한 장당 최대 8개입니다. careers의 0~${Math.max(0, facts.length - 1)} 인덱스를 중복·누락 없이 careerIndexes에 모두 담습니다.\n- 수상·선정, 공연·활동, 방송·언론은 서로 의미가 드러나도록 career 페이지 제목과 흐름을 구분합니다.\n- 각 슬라이드는 하나의 주장만 전달합니다. 입력 내용을 페이지마다 복사하거나 장황하게 요약하지 않습니다.\n- 제목은 ABOUT, HISTORY 같은 분류명이 아니라 그 페이지가 전달할 구체적인 메시지로 씁니다.\n- 표지는 활동명과 짧은 태그라인만 두며 설명문을 넣지 않습니다.\n- 이미지 후보는 실제 화면을 보고 서사를 강화할 때만 선택합니다. 이미지는 원본 비율을 유지해 프레임 안에 배치되므로, 세로 사진·포스터도 잘리지 않는 레이아웃을 선택합니다.\n- 같은 이미지는 전체 PPT에서 한 번만 사용하고 imageRefs에는 제공된 정확한 asset id만 씁니다.\n- 경력은 원본 인덱스를 careerIndexes에 담고 사실을 만들거나 과장하지 않습니다.\n- 내부 기획 메모는 imagePurpose에만 쓰고 슬라이드 본문에는 노출하지 않습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 55자, bullets 없음\n- about: title 34자, body 160자, bullets 최대 3개·각 34자\n- strengths: title 34자, body 없음, bullets 정확히 3개·각 42자\n- gallery: title 34자, body 70자, bullets 없음\n- career: title 34자, body 70자, bullets 없음, 근거 최대 8개\n- contact: title 30자, body 110자, bullets 최대 2개·각 36자\n- 분할 레이아웃에 이미지를 쓰는 about/contact 제목은 22자 이내로 더 짧게 씁니다.\n- 공간보다 내용이 많으면 글자를 작게 만들지 말고 핵심 사실만 남겨 줄입니다.\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
+      text: `당신은 Gamma 수준의 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 아래 사실과 이미지 후보만 사용해 편집 가능한 PPT의 최종 슬라이드 기획을 만드세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 무대 경쟁력, 검증된 활동, 섭외 방법을 짧은 시간에 이해하고 연락하게 만듭니다.\n\n중요: careers는 사용자가 직접 입력한 경력과 PDF에서 추출해 제외하지 않은 수상·공연·주요 활동·언론 사실을 합친 전체 근거 목록입니다. 일부만 골라 버리지 말고 모든 인덱스를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 페이지 텍스트도 소개·강점·제목을 구체화하는 근거로 사용하세요.\n\n구성 규칙:\n- 내용 누락을 막기 위해 요청 ${requestedPageCount}장보다 늘어난 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- career 슬라이드는 최소 ${requiredCareerSlides}장이며 한 장당 최대 8개입니다. careers의 0~${Math.max(0, facts.length - 1)} 인덱스를 중복·누락 없이 careerIndexes에 모두 담습니다.\n- 수상·선정, 공연·활동, 방송·언론은 서로 의미가 드러나도록 career 페이지 제목과 흐름을 구분합니다.\n- 각 슬라이드는 하나의 주장만 전달합니다. 입력 내용을 페이지마다 복사하거나 장황하게 요약하지 않습니다.\n- 제목은 ABOUT, HISTORY 같은 분류명이 아니라 그 페이지가 전달할 구체적인 메시지로 씁니다.\n- 표지는 활동명과 짧은 태그라인만 두며 설명문을 넣지 않습니다.\n- 사진을 슬라이드 배경이나 full bleed로 사용하지 않습니다. 모든 이미지는 독립된 직사각형 프레임 안에 원본 비율로 삽입하고, 세로 사진·포스터도 잘리지 않게 합니다.\n- 이미지 후보는 실제 화면을 보고 서사를 강화할 때만 선택합니다.\n- 같은 이미지는 전체 PPT에서 한 번만 사용하고 imageRefs에는 제공된 정확한 asset id만 씁니다.\n- 경력은 원본 인덱스를 careerIndexes에 담고 사실을 만들거나 과장하지 않습니다.\n- 내부 기획 메모는 imagePurpose에만 쓰고 슬라이드 본문에는 노출하지 않습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 55자, bullets 없음\n- about: title 34자, body 160자, bullets 최대 3개·각 34자\n- strengths: title 34자, body 없음, bullets 정확히 3개·각 42자\n- gallery: title 34자, body 70자, bullets 없음\n- career: title 34자, body 70자, bullets 없음, 근거 최대 8개\n- contact: title 30자, body 110자, bullets 최대 2개·각 36자\n- 분할 레이아웃에 이미지를 쓰는 about/contact 제목은 22자 이내로 더 짧게 씁니다.\n- 공간보다 내용이 많으면 글자를 작게 만들지 말고 핵심 사실만 남겨 줄입니다.\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
     }];
 
     assets.forEach((asset) => {
       const match = asset.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
       if (!match) return;
-      parts.push({ text: `이미지 후보 ID=${asset.id}, 종류=${asset.kind}${asset.pageNumber ? `, PDF ${asset.pageNumber}페이지` : ""}` });
+      parts.push({ text: `이미지 후보 ID=${asset.id}, 종류=${asset.kind}${asset.pageNumber ? `, PDF ${asset.pageNumber}페이지` : ""}${asset.sourceTitle ? `, 출처=${asset.sourceTitle}` : ""}` });
       parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
     });
 

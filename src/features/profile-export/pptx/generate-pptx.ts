@@ -9,6 +9,8 @@ interface VisualAsset {
   kind: "representative" | "performance" | "pdf_page";
   pageNumber?: number;
   dataUrl: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
 }
 
 export interface DeckExportResult {
@@ -22,6 +24,7 @@ export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   const assets: VisualAsset[] = [];
   if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", dataUrl: profile.representativeImage });
   profile.performanceImages.forEach((dataUrl, index) => assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }));
+  (profile.externalImages ?? []).forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
   profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => assets.push({ id: `pdf-page-${page.pageNumber}`, kind: "pdf_page", pageNumber: page.pageNumber, dataUrl: page.previewDataUrl }));
   return assets;
 }
@@ -55,11 +58,11 @@ function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
   };
 }
 
-async function makeThumbnail(dataUrl: string) {
+export async function makeImageThumbnail(dataUrl: string, maxDimension = 640) {
   return new Promise<string>((resolve) => {
     const image = new Image();
     image.onload = () => {
-      const scale = Math.min(1, 640 / Math.max(image.naturalWidth, image.naturalHeight));
+      const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
       canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -74,7 +77,7 @@ async function makeThumbnail(dataUrl: string) {
 function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   const deckFacts = buildDeckFacts(profile);
   const slides: DeckSlidePlan[] = [
-    { type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: assets[0] ? [assets[0].id] : [], imagePurpose: "예술인의 첫인상", careerIndexes: [], layout: assets[0] ? "full_bleed" : "editorial" },
+    { type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: assets[0] ? [assets[0].id] : [], imagePurpose: "예술인의 첫인상", careerIndexes: [], layout: assets[0] ? "split_right" : "editorial" },
     { type: "about", eyebrow: "IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: profile.introduction, bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean), imageRefs: assets[1] ? [assets[1].id] : [], imagePurpose: "활동 정체성과 분위기", careerIndexes: [], layout: assets[1] ? "split_right" : "editorial" },
     { type: "strengths", eyebrow: "WHY THIS ARTIST", title: "현장에서 분명해지는 경쟁력", body: "", bullets: (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths).slice(0, 3), imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" },
   ];
@@ -102,7 +105,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
 }
 
 async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
-  const thumbnails = await Promise.all(assets.slice(0, 10).map(async (asset) => ({ ...asset, dataUrl: await makeThumbnail(asset.dataUrl) })));
+  const thumbnails = await Promise.all(assets.slice(0, 10).map(async (asset) => ({ ...asset, dataUrl: await makeImageThumbnail(asset.dataUrl) })));
   const deckFacts = buildDeckFacts(profile);
   const profileFacts = {
     artistName: profile.artistName,
@@ -182,6 +185,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     const primaryImage = images[0];
     const isCover = slidePlan.type === "cover";
     slide.background = { color: hex(isCover ? p.background : slideIndex % 2 ? p.surface : p.background) };
+    const sourceNotes = images.filter((asset) => asset.sourceUrl).map((asset) => `${asset.sourceTitle || "웹 이미지"}: ${asset.sourceUrl}`);
+    if (sourceNotes.length) slide.addNotes(`[Sources]\n${sourceNotes.join("\n")}`);
 
     if (isCover) {
       if (primaryImage) {
