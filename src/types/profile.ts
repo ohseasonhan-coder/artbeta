@@ -107,12 +107,15 @@ export interface ProfileData {
   generatedStrengths: string[];
   representativeImage?: string;
   performanceImages: string[];
+  performanceImageCategories: ProfileImageCategory[];
   externalImages: ExternalImageAsset[];
   extractedItems: ExtractedItem[];
   pdfPageAssets: PdfPageAsset[];
   deckPlan?: DeckPlan;
   deckPlanMeta?: DeckPlanMeta;
 }
+
+export type ProfileImageCategory = "activity" | "poster" | "history";
 
 export const initialProfile: ProfileData = {
   source: null,
@@ -136,6 +139,7 @@ export const initialProfile: ProfileData = {
   tagline: "",
   generatedStrengths: [],
   performanceImages: [],
+  performanceImageCategories: [],
   externalImages: [],
   extractedItems: [],
   pdfPageAssets: [],
