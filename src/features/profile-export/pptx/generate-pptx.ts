@@ -41,6 +41,46 @@ function compactText(value: string, max: number) {
   return `${candidate.slice(0, breakAt > max * 0.55 ? breakAt : max - 1).trim()}…`;
 }
 
+function splitText(value: string, max: number) {
+  const remaining = value.replace(/\s+/g, " ").trim();
+  if (!remaining || !max) return remaining ? [remaining] : [];
+  const chunks: string[] = [];
+  let rest = remaining;
+  while (rest.length > max) {
+    const candidate = rest.slice(0, max + 1);
+    const boundaries = [candidate.lastIndexOf(". "), candidate.lastIndexOf("다. "), candidate.lastIndexOf(" · "), candidate.lastIndexOf(" ")];
+    const breakAt = Math.max(...boundaries);
+    const cut = breakAt > max * 0.55 ? breakAt + (candidate.slice(breakAt, breakAt + 2) === ". " ? 1 : 0) : max;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) chunks.push(rest);
+  return chunks;
+}
+
+function paginateSlideCopy(slides: DeckSlidePlan[]) {
+  return slides.flatMap((slide) => {
+    const bodyLimit = slide.imageRefs.length && slide.type === "about" ? 110 : slide.imageRefs.length && slide.type === "contact" ? 85 : slide.type === "cover" ? 55 : ["about", "contact"].includes(slide.type) ? 160 : 0;
+    const bulletLimit = slide.type === "strengths" ? 42 : slide.type === "about" ? 34 : slide.type === "contact" ? 36 : 0;
+    const bulletCount = slide.type === "strengths" || slide.type === "about" ? 3 : slide.type === "contact" ? 2 : 0;
+    const bodyChunks = bodyLimit ? splitText(slide.body, bodyLimit) : slide.body ? [slide.body] : [];
+    const bulletChunks = bulletLimit ? slide.bullets.flatMap((item) => splitText(item, bulletLimit)) : [];
+    const pageCount = Math.max(1, bodyChunks.length, bulletCount ? Math.ceil(bulletChunks.length / bulletCount) : 1);
+    if (pageCount === 1) return [slide];
+    return Array.from({ length: pageCount }, (_, index): DeckSlidePlan => ({
+      ...slide,
+      type: slide.type === "cover" && index > 0 ? "about" : slide.type,
+      eyebrow: index ? `${slide.eyebrow || "PROFILE"} · CONTINUED` : slide.eyebrow,
+      title: index ? `${slide.title} · 계속` : slide.title,
+      body: bodyChunks[index] || "",
+      bullets: bulletCount ? bulletChunks.slice(index * bulletCount, index * bulletCount + bulletCount) : [],
+      imageRefs: index ? [] : slide.imageRefs,
+      imagePurpose: index ? "" : slide.imagePurpose,
+      layout: index ? "editorial" : slide.layout,
+    }));
+  });
+}
+
 function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
   const budgets = {
     cover: [26, 55, 0, 0], about: [34, 160, 3, 34], strengths: [34, 0, 3, 42],
@@ -53,7 +93,7 @@ function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
     title: compactText(slide.title, slide.imageRefs.length && ["about", "contact"].includes(slide.type) ? Math.min(title, 22) : title),
     body: compactText(slide.body, slide.imageRefs.length && slide.type === "about" ? 110 : slide.imageRefs.length && slide.type === "contact" ? 85 : body),
     bullets: slide.bullets.slice(0, bulletCount).map((item) => compactText(item, bulletLength)),
-    careerIndexes: slide.careerIndexes.slice(0, 9),
+    careerIndexes: slide.careerIndexes.slice(0, 5),
     imageRefs: slide.imageRefs.slice(0, 3),
   };
 }
@@ -86,11 +126,11 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     if (index % 3 === 0) slides.push({ type: "gallery", eyebrow: "ON STAGE", title: "사진으로 확인하는 무대의 밀도", body: "", bullets: [], imageRefs: galleryAssets.slice(index, index + 3).map((asset) => asset.id), imagePurpose: "공연 규모와 현장성", careerIndexes: [], layout: "gallery" });
   });
   const careerIndexes = deckFacts.map((_, index) => index);
-  for (let index = 0; index < Math.max(1, careerIndexes.length); index += 9) {
-    slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: index ? "이어지는 주요 활동" : "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: careerIndexes.slice(index, index + 9), layout: "timeline" });
+  for (let index = 0; index < Math.max(1, careerIndexes.length); index += 5) {
+    slides.push({ type: "career", eyebrow: "SELECTED HISTORY", title: index ? "이어지는 주요 활동" : "경력으로 증명된 지속적인 활동", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: careerIndexes.slice(index, index + 5), layout: "timeline" });
   }
   const contact: DeckSlidePlan = { type: "contact", eyebrow: "CONTACT", title: "다음 무대를 함께 만들겠습니다", body: [profile.contact, profile.videoUrl, profile.region].filter(Boolean).join("\n"), bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" };
-  const requiredCareerSlides = Math.max(1, Math.ceil(deckFacts.length / 8));
+  const requiredCareerSlides = Math.max(1, Math.ceil(deckFacts.length / 5));
   const target = Math.min(16, Math.max(4, profile.pageCount, 5 + requiredCareerSlides));
   const core = slides.filter((slide) => slide.type !== "contact");
   while (core.length > target - 1) {
@@ -101,7 +141,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   while (core.length < target - 1) {
     core.splice(core.length - 1, 0, { type: "gallery", eyebrow: "VISUAL STORY", title: "무대의 장면이 보여주는 예술적 정체성", body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" });
   }
-  return { narrative: "정체성에서 현장 경쟁력과 검증된 활동을 거쳐 섭외 행동으로 연결", visualDirection: "선명한 타이포그래피와 실제 공연 이미지 중심", slides: [...core, contact].map(fitSlideCopy) };
+  return { narrative: "정체성에서 현장 경쟁력과 검증된 활동을 거쳐 섭외 행동으로 연결", visualDirection: "선명한 타이포그래피와 실제 공연 이미지 중심", slides: paginateSlideCopy([...core, contact]).map(fitSlideCopy) };
 }
 
 async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
@@ -137,7 +177,7 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
   const assets = collectDeckAssets(profile);
   try {
     const result = await requestDeckPlan(profile, assets);
-    return { plan: { ...result.plan, slides: result.plan.slides.map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
+    return { plan: { ...result.plan, slides: paginateSlideCopy(result.plan.slides).map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
   } catch {
     return { plan: fallbackPlan(profile, assets), meta: { mode: "local", provider: "기본 기획", model: "로컬" } };
   }
@@ -152,7 +192,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const prepared = profile.deckPlan && profile.deckPlanMeta
     ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
     : await prepareDeckPlan(profile);
-  const plan = { ...prepared.plan, slides: prepared.plan.slides.map(fitSlideCopy) };
+  const plan = { ...prepared.plan, slides: paginateSlideCopy(prepared.plan.slides).map(fitSlideCopy) };
   const exportMeta = prepared.meta;
   const deckFacts = buildDeckFacts(profile);
 
@@ -215,13 +255,13 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     if (slidePlan.type === "career") {
       addEyebrow(slide, slidePlan.eyebrow);
       slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
-      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 8);
+      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 5);
       selected.forEach((item, index) => {
-        const y = 2.12 + index * 0.55;
-        slide.addText(item.date || "—", { x: 0.82, y, w: 1.35, h: 0.24, fontSize: 11, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addText(compactText(item.title, 72), { x: 2.25, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 14, bold: true, color: hex(p.text), margin: 0 });
-        slide.addText(compactText([item.categoryLabel, item.organization, item.pageNumber ? `${item.pageNumber}p` : ""].filter(Boolean).join(" · "), 52), { x: 9.0, y, w: 3.35, h: 0.24, fontSize: 9, color: hex(p.muted), margin: 0, align: "right" });
-        slide.addShape(pptx.ShapeType.line, { x: 2.25, y: y + 0.38, w: 10.1, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
+        const y = 2.02 + index * 0.9;
+        slide.addText(item.date || "—", { x: 0.82, y, w: 1.25, h: 0.32, fontSize: 16, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addText(item.title, { x: 2.25, y: y - 0.03, w: 10.05, h: 0.44, fontSize: 16, bold: true, color: hex(p.text), margin: 0, breakLine: false });
+        slide.addText([item.categoryLabel, item.organization, item.pageNumber ? `${item.pageNumber}p` : ""].filter(Boolean).join(" · "), { x: 2.25, y: y + 0.47, w: 10.05, h: 0.3, fontSize: 12, color: hex(p.muted), margin: 0, breakLine: false });
+        slide.addShape(pptx.ShapeType.line, { x: 2.25, y: y + 0.78, w: 10.1, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
       return;
