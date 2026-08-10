@@ -233,7 +233,7 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
     contact: profile.contact,
     videoUrl: profile.videoUrl,
     careers: deckFacts.map((fact, index) => ({ index, ...fact })),
-    extractedFacts: profile.extractedItems.filter((item) => item.status !== "excluded").map(({ type, label, value, pageNumber }) => ({ type, label, value, pageNumber })),
+    extractedFacts: profile.extractedItems.filter((item) => item.status !== "excluded").map(({ type, label, value, pageNumber, sourceName, sourceUrl, verificationTier }) => ({ type, label, value, pageNumber, sourceName, sourceUrl, verificationTier })),
     pdfPageText: profile.pdfPageAssets.filter((page) => page.text.trim()).map(({ pageNumber, text, textSource }) => ({ pageNumber, text: text.slice(0, 6000), textSource })),
     strengths: profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths,
     experiences: profile.experiences,
@@ -322,7 +322,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     const primaryImage = images[0];
     const isCover = slidePlan.type === "cover";
     slide.background = { color: hex(isCover ? p.background : slideIndex % 2 ? p.surface : p.background) };
-    const sourceNotes = images.flatMap((asset) => asset.sourceUrl ? [`${asset.sourceTitle || "웹 이미지"}: ${asset.sourceUrl}`] : asset.kind === "generated" ? [asset.sourceTitle || "AI 연출 이미지 · 실제 현장 증빙이 아님"] : asset.kind === "pdf_page" ? [`사용자 제공 PDF ${asset.pageNumber ?? ""}페이지`] : []);
+    const factSourceNotes = slidePlan.careerIndexes.map((index) => deckFacts[index]).filter((fact) => fact?.sourceUrl).map((fact) => `${fact.sourceName || "웹 참고 출처"}: ${fact.sourceUrl}${fact.verificationTier === "reference" ? " (참고 자료 · 사실 확인 필요)" : ""}`);
+    const sourceNotes = [...images.flatMap((asset) => asset.sourceUrl ? [`${asset.sourceTitle || "웹 이미지"}: ${asset.sourceUrl}`] : asset.kind === "generated" ? [asset.sourceTitle || "AI 연출 이미지 · 실제 현장 증빙이 아님"] : asset.kind === "pdf_page" ? [`사용자 제공 PDF ${asset.pageNumber ?? ""}페이지`] : []), ...factSourceNotes];
     if (sourceNotes.length) slide.addNotes(`[Sources]\n${sourceNotes.join("\n")}`);
 
     if (isCover) {

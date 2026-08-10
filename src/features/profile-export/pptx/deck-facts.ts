@@ -10,7 +10,10 @@ export interface DeckFact {
   category: DeckFactCategory;
   categoryLabel: string;
   pageNumber?: number;
-  source: "profile" | "pdf";
+  source: "profile" | "pdf" | "web";
+  sourceName?: string;
+  sourceUrl?: string;
+  verificationTier?: "primary" | "platform" | "reference";
 }
 
 function shortenAtWord(value: string, max: number) {
@@ -72,7 +75,10 @@ function extractedToFact(item: ExtractedItem): DeckFact | null {
     category,
     categoryLabel: categoryLabels[category],
     pageNumber: item.pageNumber,
-    source: "pdf",
+    source: item.sourceUrl ? "web" : "pdf",
+    sourceName: item.sourceName,
+    sourceUrl: item.sourceUrl,
+    verificationTier: item.verificationTier,
   };
 }
 
@@ -97,7 +103,10 @@ export function buildDeckFacts(profile: ProfileData): DeckFact[] {
       organization: career.organization,
       category,
       categoryLabel: categoryLabels[category],
-      source: "profile",
+      source: career.sourceUrl ? "web" : "profile",
+      sourceName: career.sourceName,
+      sourceUrl: career.sourceUrl,
+      verificationTier: career.verificationTier,
     });
   });
 

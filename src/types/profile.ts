@@ -6,6 +6,9 @@ export interface Career {
   year: string;
   title: string;
   organization: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  verificationTier?: "primary" | "platform" | "reference";
 }
 
 export interface ExtractedItem {
@@ -31,6 +34,9 @@ export interface ExtractedItem {
   confidence: number;
   status: ReviewStatus;
   pageNumber?: number;
+  sourceName?: string;
+  sourceUrl?: string;
+  verificationTier?: "primary" | "platform" | "reference";
 }
 
 export interface PdfPageAsset {
