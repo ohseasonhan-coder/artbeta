@@ -31,7 +31,7 @@ const galleryPhotoGuides = [
 
 interface VisualAsset {
   id: string;
-  kind: "representative" | "performance" | "pdf_page";
+  kind: "representative" | "performance" | "generated" | "pdf_page";
   pageNumber?: number;
   dataUrl: string;
   sourceUrl?: string;
@@ -50,7 +50,8 @@ export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", dataUrl: profile.representativeImage });
   profile.performanceImages
     .forEach((dataUrl, index) => { if (dataUrl) assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }); });
-  (profile.externalImages ?? []).forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
+  (profile.externalImages ?? []).filter((asset) => asset.source !== "ai").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
+  (profile.externalImages ?? []).filter((asset) => asset.source === "ai").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "generated", dataUrl: asset.dataUrl, sourceTitle: `AI 연출 이미지 · ${asset.title}${asset.promptBasis ? ` · 근거: ${asset.promptBasis}` : ""}` }));
   profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => assets.push({
     id: `pdf-page-${page.pageNumber}`,
     kind: "pdf_page",
@@ -302,6 +303,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const addImage = (slide: ReturnType<typeof pptx.addSlide>, asset: VisualAsset, x: number, y: number, w: number, h: number, alt: string, mode: "contain" | "cover" = "contain") => {
     if (mode === "contain") slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: { color: hex(p.surface) }, line: { color: hex(p.muted), transparency: 85, width: 0.5 } });
     slide.addImage({ data: asset.dataUrl, x, y, w, h, sizing: { type: mode, w, h }, altText: alt || `${profile.artistName} 활동 이미지` });
+    if (asset.kind === "generated") slide.addText("AI 연출 이미지", { x: x + 0.12, y: y + h - 0.34, w: 1.18, h: 0.22, fontSize: 7, bold: true, color: "FFFFFF", fill: { color: "1B4D3E", transparency: 8 }, margin: 0.04, align: "center", breakLine: false });
   };
   const addImagePlaceholder = (slide: ReturnType<typeof pptx.addSlide>, x: number, y: number, w: number, h: number, guide: string) => {
     slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: { color: hex(p.surface), transparency: 35 }, line: { color: hex(p.muted), transparency: 45, width: 1 } });
@@ -320,7 +322,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     const primaryImage = images[0];
     const isCover = slidePlan.type === "cover";
     slide.background = { color: hex(isCover ? p.background : slideIndex % 2 ? p.surface : p.background) };
-    const sourceNotes = images.flatMap((asset) => asset.sourceUrl ? [`${asset.sourceTitle || "웹 이미지"}: ${asset.sourceUrl}`] : asset.kind === "pdf_page" ? [`사용자 제공 PDF ${asset.pageNumber ?? ""}페이지`] : []);
+    const sourceNotes = images.flatMap((asset) => asset.sourceUrl ? [`${asset.sourceTitle || "웹 이미지"}: ${asset.sourceUrl}`] : asset.kind === "generated" ? [asset.sourceTitle || "AI 연출 이미지 · 실제 현장 증빙이 아님"] : asset.kind === "pdf_page" ? [`사용자 제공 PDF ${asset.pageNumber ?? ""}페이지`] : []);
     if (sourceNotes.length) slide.addNotes(`[Sources]\n${sourceNotes.join("\n")}`);
 
     if (isCover) {

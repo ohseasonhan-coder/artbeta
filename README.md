@@ -46,6 +46,7 @@ notepad .env.local
 ```dotenv
 GEMINI_API_KEY=발급받은_키
 GEMINI_MODEL=gemini-3.6-flash
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
 ```
 
 4. 이미 개발 서버가 실행 중이었다면 종료 후 `npm run dev`로 다시 시작합니다.
@@ -54,7 +55,7 @@ OpenAI를 유료 대체 경로로 함께 사용하려면 같은 파일에 `OPENA
 
 ### Vercel 배포 시
 
-Vercel 프로젝트의 **Settings → Environment Variables**에 `GEMINI_API_KEY`와 `GEMINI_MODEL`을 추가한 뒤 다시 배포합니다. 환경변수는 Production, Preview, Development 중 사용할 환경에 각각 적용하세요. 비밀키를 GitHub, 클라이언트 코드, 브라우저 콘솔에 넣으면 안 됩니다.
+Vercel 프로젝트의 **Settings → Environment Variables**에 `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_IMAGE_MODEL`을 추가한 뒤 다시 배포합니다. 환경변수는 Production, Preview, Development 중 사용할 환경에 각각 적용하세요. 비밀키를 GitHub, 클라이언트 코드, 브라우저 콘솔에 넣으면 안 됩니다.
 
 ### AI 분석 흐름
 
@@ -71,6 +72,10 @@ PDF 업로드 후 앱은 먼저 모든 페이지를 렌더링하고 텍스트 �
 - YouTube: `YOUTUBE_API_KEY`
 
 로컬에서는 `.env.local`, Vercel에서는 Project Settings → Environment Variables에 사용할 검색원의 키를 추가하고 재배포합니다. 모든 검색원을 한꺼번에 설정할 필요는 없습니다.
+
+### 빈 사진 영역 AI 채우기
+
+디자인 단계의 `빈 사진 영역 AI로 채우기`는 사용자가 등록한 대표사진과 확인된 경력·장소만 근거로 최대 3장의 보조 이미지를 생성합니다. 생성물은 실제 현장 사진과 혼동되지 않도록 화면과 PPT에 `AI 연출 이미지`로 표시되고, 근거 경력도 PPT 메모에 기록됩니다. 웹 검색 후보에서 워터마크나 높은 권리 위험이 감지되면 추가 버튼이 비활성화됩니다. 워터마크를 삭제하거나 잘라내는 기능은 제공하지 않습니다.
 
 ## 자산 저장 원칙
 

@@ -45,11 +45,15 @@ export interface PdfPageAsset {
 export interface ExternalImageAsset {
   id: string;
   dataUrl: string;
-  source: "naver" | "google" | "youtube";
-  sourceUrl: string;
+  source: "naver" | "google" | "youtube" | "ai";
+  sourceUrl?: string;
   title: string;
   relevanceScore: number;
   qualityScore: number;
+  disclosure?: string;
+  promptBasis?: string;
+  watermarkDetected?: boolean;
+  usageStatus?: "approved" | "review" | "blocked";
 }
 
 export type DeckSlideType = "cover" | "about" | "strengths" | "gallery" | "career" | "contact";
