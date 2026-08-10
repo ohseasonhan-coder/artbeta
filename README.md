@@ -22,6 +22,8 @@
 - 실제 미리보기와 편집 가능한 PPTX 다운로드
 - 모바일 반응형 UI
 - 상세 정보·사진 위치·외부 기록·디자인은 접힌 `세부 설정`에서 선택적으로 수정
+- 완성된 프로필로 팀원을 모집하거나 팀 합류를 제안하는 내부 검색 게시판
+- 분야·지역·역할·활동 형태·보상 조건 필터와 모집 중/완료 관리
 
 ## 실행
 
@@ -94,6 +96,19 @@ design-assets/templates/{template_key}/
 artist-assets/{user_id}/profile-pdfs|representative-images|performance-images/
 profile-exports/{user_id}/{profile_project_id}/pptx|pdf|previews|versions/
 ```
+
+## 무료 팀 모집 게시판 연결
+
+`/team`은 프로필 초안의 활동명·분야·지역·대표사진·주요 경력을 자동으로 불러와 모집글을 만듭니다. Supabase가 연결되지 않은 로컬·Vercel 환경에서는 브라우저 기기 저장 체험 모드로 작동합니다.
+
+여러 사용자가 같은 게시판을 사용하려면 무료 Supabase 프로젝트의 SQL Editor에서 `supabase/team_posts.sql`을 실행한 뒤 다음 서버 전용 환경변수를 `.env.local`과 Vercel에 추가합니다.
+
+```env
+SUPABASE_URL=https://프로젝트ID.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+```
+
+Secret Key는 브라우저 코드나 `NEXT_PUBLIC_` 환경변수에 넣지 않습니다. 게시글은 앱의 `/api/team-posts` 서버 라우트를 통해서만 저장되며, 작성 시 발급한 수정 토큰은 해당 브라우저에 보관되어 모집 완료 상태를 변경할 때 사용됩니다.
 
 저장소에는 템플릿 레지스트리, 레이아웃 정의, 경로와 manifest만 유지합니다.
 

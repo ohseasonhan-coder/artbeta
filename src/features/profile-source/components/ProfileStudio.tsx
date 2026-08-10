@@ -405,7 +405,7 @@ export default function ProfileStudio() {
     <main className="app-shell">
       <header className="topbar">
         <button className="brand" onClick={() => setStep(0)} aria-label="홈으로"><span className="brand-mark">A</span><span>ARTFOLIO</span></button>
-        <nav><button>프로필 제작</button><Link href="/admin/design-templates">디자인 관리</Link><button onClick={resetDraft}>새로 시작</button></nav>
+        <nav><button>프로필 제작</button><Link href="/team">팀원 찾기</Link><Link href="/admin/design-templates">디자인 관리</Link><button onClick={resetDraft}>새로 시작</button></nav>
         <button className="icon-button"><Menu size={20} /></button>
       </header>
 
