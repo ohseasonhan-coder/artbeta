@@ -85,6 +85,11 @@ function extractedToFact(item: ExtractedItem): DeckFact | null {
 export function buildDeckFacts(profile: ProfileData): DeckFact[] {
   const facts: DeckFact[] = [];
   const keys = new Set<string>();
+  const excludedKeys = new Set(profile.extractedItems.filter((item) => item.status === "excluded").map((item) => {
+    const date = item.value.match(/(?:19|20)\d{2}(?:[.\-/년]\s*\d{1,2})?(?:[.\-/월]\s*\d{1,2})?/)?.[0] ?? "";
+    const title = item.value.replace(date, "").split(/\s*[·|｜]\s*/)[0].replace(/^[-–—,.:\s]+/, "").trim();
+    return factKey(date, title);
+  }));
   const add = (fact: DeckFact) => {
     if (!fact.title.trim()) return;
     const key = factKey(fact.date, fact.title);
@@ -95,6 +100,7 @@ export function buildDeckFacts(profile: ProfileData): DeckFact[] {
 
   profile.careers.forEach((career) => {
     if (!career.title.trim()) return;
+    if (excludedKeys.has(factKey(career.year, career.title))) return;
     const category = inferCategory(`${career.title} ${career.organization}`);
     add({
       id: career.id,

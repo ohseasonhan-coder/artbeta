@@ -91,7 +91,7 @@ const fields = ["보컬", "연주", "국악", "무용", "퍼포먼스", "마술"
 const strengths = ["전문적인 실력", "관객과의 소통", "밝고 즐거운 분위기", "감성적인 분위기", "입장하고 화려한 무대", "전통과 현대의 조화", "가족 모두가 즐길 수 있음", "교육적 요소", "독특한 콘셉트"];
 const experiences = ["기업행사", "공공기관 행사", "지역축제", "학교 행사", "문화재단 공연", "거리공연", "방송·미디어", "해외공연", "아직 공식 경력은 많지 않음"];
 const impressions = ["실력이 뛰어나다", "믿을 수 있다", "행사를 잘 이해한다", "관객 반응이 좋다", "밝고 친근하다", "고급스럽다", "독창적이다", "전통성이 있다", "급한 일정에도 대응할 수 있다"];
-const steps = ["시작", "자료 준비", "프로필 정보", "콘텐츠", "디자인", "완성"];
+const steps = ["자료 넣기", "내용 확인", "PPT 완성"];
 const photoMenuGuides: Array<{ number: number; title: string; description: string; category?: ProfileImageCategory }> = [
   { number: 1, title: "대표사진", description: "표지에 사용할 얼굴과 분위기가 선명한 세로 사진" },
   { number: 2, title: "주요 활동사진", description: "가장 대표적인 공연·전시·창작 활동 장면", category: "activity" },
@@ -143,7 +143,6 @@ export default function ProfileStudio() {
   const [pdfProgress, setPdfProgress] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [unsureChoice, setUnsureChoice] = useState("");
   const [aiStatus, setAiStatus] = useState<AiStatus>({ configured: false, provider: "확인 중", model: "" });
   const template = useMemo(() => getTemplate(profile.templateKey), [profile.templateKey]);
 
@@ -164,13 +163,11 @@ export default function ProfileStudio() {
     if (profile.source) void saveProfileDraft(profile).catch(() => setNotice("초안 저장 공간이 부족합니다. 불필요한 이미지를 줄여주세요."));
   }, [profile]);
 
-  const update = <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => setProfile((current) => ({ ...current, [key]: value }));
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [step]);
 
-  const selectSource = (source: SourceType) => {
-    update("source", source);
-    if (source === "questionnaire") setStep(2);
-    else setStep(1);
-  };
+  const update = <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => setProfile((current) => ({ ...current, [key]: value }));
 
   const uploadPdf = async (file?: File) => {
     if (!file) return;
@@ -279,7 +276,7 @@ export default function ProfileStudio() {
           ? `이미지형 ${data.ocrPageCount}개 페이지를 OCR로 읽었어요. AI 키를 연결하면 페이지 이미지까지 정밀 분석합니다.`
           : "기본 분석을 완료했어요. AI 키를 연결하면 연혁과 고유명사를 더 정밀하게 분류합니다.");
       setPdfProgress(100);
-      setTimeout(() => setStep(2), 450);
+      setTimeout(() => setStep(1), 450);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "PDF 분석에 실패했습니다.");
       setPdfProgress(0);
@@ -317,6 +314,36 @@ export default function ProfileStudio() {
     });
   };
 
+  const uploadQuickMaterials = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
+    update("source", files.some((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "pdf" : "questionnaire");
+    const pdf = files.find((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+    const images = files.filter((file) => file.type.startsWith("image/") && file.size <= FILE_LIMITS.image);
+    images.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = String(reader.result);
+        setProfile((current) => {
+          if (!current.representativeImage) return { ...current, representativeImage: value };
+          const performanceImages = [...current.performanceImages];
+          const performanceImageCategories = [...current.performanceImageCategories];
+          if (performanceImages.filter(Boolean).length + current.externalImages.length >= FILE_LIMITS.maxPerformanceImages) return current;
+          performanceImages.push(value);
+          performanceImageCategories.push("activity");
+          return { ...current, performanceImages, performanceImageCategories };
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    if (pdf) void uploadPdf(pdf);
+    else {
+      setNotice(`${images.length}장의 사진을 등록했어요. 대표사진과 활동사진을 자동으로 나눴습니다.`);
+      setStep(1);
+    }
+  };
+
   const generateCopy = async () => {
     setBusy(true); setNotice("");
     try {
@@ -345,14 +372,24 @@ export default function ProfileStudio() {
 
   const prepareDeck = async () => {
     setBusy(true);
-    setNotice("Gemini가 지금까지 입력한 내용과 사진을 페이지별로 구성하고 있어요.");
+    setNotice("입력한 자료로 소개문을 보완하고 PPT 초안을 만들고 있어요.");
     try {
-      const prepared = await prepareDeckPlan(profile);
-      setProfile((current) => ({ ...current, pageCount: prepared.plan.slides.length, deckPlan: prepared.plan, deckPlanMeta: prepared.meta }));
+      let workingProfile = profile;
+      if (!workingProfile.introduction.trim()) {
+        try {
+          const response = await fetch("/api/ai/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(workingProfile) });
+          const copy = await response.json();
+          if (response.ok) workingProfile = { ...workingProfile, tagline: copy.tagline || workingProfile.tagline, introduction: copy.introduction || workingProfile.introduction, generatedStrengths: copy.strengths || workingProfile.generatedStrengths };
+        } catch {
+          // 문구 보완이 실패해도 현재 자료로 PPT 초안을 계속 만듭니다.
+        }
+      }
+      const prepared = await prepareDeckPlan(workingProfile);
+      setProfile({ ...workingProfile, pageCount: prepared.plan.slides.length, deckPlan: prepared.plan, deckPlanMeta: prepared.meta });
       setNotice(prepared.meta.mode === "ai"
         ? `${prepared.meta.provider} · ${prepared.meta.model}이 ${prepared.plan.slides.length}페이지를 구성했어요. 품질 검사 ${prepared.meta.qualityScore ?? 90}점 · 근거 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영.`
         : `${prepared.meta.warning || "Gemini 기획을 완료하지 못했습니다."} 기본 페이지 구성으로 미리보기를 만들었어요. (오류 코드: ${prepared.meta.errorCode || "DECK_PLANNING_FAILED"})`);
-      setStep(5);
+      setStep(2);
     } catch {
       setNotice("PPT 페이지 기획 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.");
     } finally {
@@ -363,8 +400,6 @@ export default function ProfileStudio() {
   const resetDraft = () => {
     void clearProfileDraft(); setProfile(initialProfile); setStep(0); setPdfName(""); setNotice("");
   };
-
-  const canContinue = step === 2 ? Boolean(profile.artistName && profile.primaryField) : step === 3 ? Boolean(profile.introduction) : true;
 
   return (
     <main className="app-shell">
@@ -384,22 +419,85 @@ export default function ProfileStudio() {
         </div>
       )}
 
-      {step === 0 && <SourceStep onSelect={selectSource} />}
-      {step === 1 && profile.source === "pdf" && <PdfStep name={pdfName} progress={pdfProgress} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadPdf} />}
-      {step === 1 && profile.source === "unsure" && <UnsureStep value={unsureChoice} setValue={setUnsureChoice} onContinue={() => selectSource(["PDF 프로필", "한글·워드 이력서", "공연 포스터"].includes(unsureChoice) ? "pdf" : "questionnaire")} />}
-      {step === 2 && <InformationStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} notice={notice} />}
-      {step === 3 && <ContentStep profile={profile} update={update} busy={busy} generate={generateCopy} notice={notice} />}
-      {step === 4 && <DesignStep profile={profile} update={update} />}
-      {step === 5 && <PreviewStep profile={profile} template={template} busy={busy} notice={notice} onEdit={() => setStep(3)} onRetry={prepareDeck} onDownload={exportDeck} />}
-
-      {step >= 2 && step < 5 && (
-        <footer className="action-bar">
-          <button className="button ghost" onClick={() => setStep(step - 1)}><ArrowLeft size={17} /> 이전</button>
-          <div><span>{step + 1} / 6</span><button className="button primary" disabled={!canContinue || busy} onClick={() => step === 4 ? void prepareDeck() : setStep(step + 1)}>{step === 4 && busy ? <><Loader2 className="spin" size={17} /> Gemini가 PPT 구성 중</> : <>다음 단계 <ArrowRight size={17} /></>}</button></div>
-        </footer>
-      )}
+      {step === 0 && <QuickStartStep profile={profile} update={update} progress={pdfProgress} fileName={pdfName} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadQuickMaterials} onSkip={() => { update("source", "questionnaire"); setStep(1); }} />}
+      {step === 1 && <QuickReviewStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} busy={busy} notice={notice} generate={generateCopy} onBuild={prepareDeck} />}
+      {step === 2 && <PreviewStep profile={profile} template={template} busy={busy} notice={notice} onEdit={() => setStep(1)} onRetry={prepareDeck} onDownload={exportDeck} />}
     </main>
   );
+}
+
+function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiStatus, onUpload, onSkip }: {
+  profile: ProfileData;
+  update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void;
+  progress: number;
+  fileName: string;
+  busy: boolean;
+  notice: string;
+  aiStatus: AiStatus;
+  onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onSkip: () => void;
+}) {
+  const [linkValue, setLinkValue] = useState(profile.videoUrl || profile.officialUrl);
+  const saveLink = () => {
+    const link = linkValue.trim();
+    if (!link) return;
+    if (isYouTubeVideoUrl(link)) update("videoUrl", normalizeVideoUrl(link));
+    else update("officialUrl", link);
+  };
+  return <section className="hero quick-start-page">
+    <div className="eyebrow"><Sparkles size={14} /> 2분 프로필 만들기</div>
+    <h1>가지고 있는 자료를<br /><em>그냥 넣어주세요</em></h1>
+    <p>PDF·사진·포스터를 구분할 필요가 없습니다. 내용을 읽고 대표사진, 경력, 수상, 공연 기록으로 자동 정리합니다.</p>
+    <div className="quick-start-card">
+      <div className="quick-identity-row"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>
+      <label className={`unified-dropzone ${busy ? "busy" : ""}`}><input type="file" accept="application/pdf,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : "PDF·사진·포스터 한 번에 추가"}</strong><small>파일을 선택하면 바로 분석을 시작합니다 · PDF 30MB, 사진 각 10MB</small></label>
+      <div className="quick-link-row"><label><span>링크가 있다면 붙여넣기 <small>선택</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onBlur={saveLink} placeholder="홈페이지·Instagram·YouTube 링크" /></label><button onClick={saveLink}>링크 저장</button></div>
+      {(busy || progress > 0) && <div className="quick-analysis-progress"><div><span style={{ width: `${progress}%` }} /></div><strong>{fileName || "업로드한 자료"} · {progress}%</strong></div>}
+      {notice && <div className="notice warning">{notice}</div>}
+      <div className="quick-ai-state"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>
+    </div>
+    <button className="text-start-button" onClick={onSkip}>자료가 없어요 · 이름부터 간단히 작성하기 <ArrowRight size={15} /></button>
+    <div className="trust-row"><span><CheckCircle2 /> 자동 저장</span><span><CheckCircle2 /> 확인한 내용만 사용</span><span><CheckCircle2 /> 실제 PPTX 다운로드</span></div>
+  </section>;
+}
+
+function QuickReviewStep({ profile, update, setProfile, uploadImage, busy, notice, generate, onBuild }: {
+  profile: ProfileData;
+  update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void;
+  setProfile: React.Dispatch<React.SetStateAction<ProfileData>>;
+  uploadImage: (event: ChangeEvent<HTMLInputElement>, representative?: boolean, category?: ProfileImageCategory, targetIndex?: number) => void;
+  busy: boolean;
+  notice: string;
+  generate: () => void;
+  onBuild: () => Promise<void>;
+}) {
+  const realCareers = profile.careers.filter((career) => career.title.trim() || career.organization.trim());
+  const reviewItems = profile.extractedItems.filter((item) => ["career", "performance", "award", "media", "introduction"].includes(item.type)).slice(0, 18);
+  const checks = [
+    Boolean(profile.artistName.trim()), Boolean(profile.primaryField.trim()), Boolean(profile.representativeImage),
+    realCareers.length > 0, Boolean(profile.introduction.trim()), Boolean(profile.contact.trim()),
+    profile.performanceImages.filter(Boolean).length > 0, Boolean(profile.videoUrl.trim()),
+  ];
+  const completeness = Math.round(checks.filter(Boolean).length / checks.length * 100);
+  const missing = [
+    !profile.representativeImage && "표지에 사용할 대표사진",
+    !realCareers.length && "대표 경력 또는 수상 1개",
+    !profile.contact.trim() && "섭외 연락처",
+    !profile.performanceImages.filter(Boolean).length && "활동사진 1장",
+  ].filter((item): item is string => Boolean(item));
+  const setItemStatus = (id: string, status: ExtractedItem["status"]) => update("extractedItems", profile.extractedItems.map((item) => item.id === id ? { ...item, status } : item));
+
+  return <section className="stage quick-review-stage">
+    <div className="section-heading"><span>02 · 내용 확인</span><h1>앱이 정리한 내용만 확인해 주세요</h1><p>맞는 내용은 그대로 두고, 다른 사람의 기록이나 불필요한 항목만 제외하면 됩니다.</p></div>
+    <div className="quick-score-card"><div><span>현재 자료 완성도</span><strong>{completeness}<small>점</small></strong></div><div><div className="score-track"><span style={{ width: `${completeness}%` }} /></div><p>{missing.length ? `${missing.slice(0, 2).join(" · ")} 추가 시 PPT가 더 좋아집니다.` : "현재 자료만으로 완성도 높은 PPT를 만들 수 있어요."}</p></div></div>
+    <div className="quick-essential-card"><div className="card-heading"><div><h2>꼭 필요한 정보</h2><p>세 가지만 확인하면 바로 PPT를 만들 수 있습니다.</p></div><span className="required-count">필수 3개</span></div><div className="quick-essential-grid"><label><span>활동명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="활동명 또는 팀명" /></label><label><span>활동 분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>섭외 연락처 <small>나중에 가능</small></span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label></div></div>
+    <div className="quick-media-card"><div><div className="quick-cover-photo">{profile.representativeImage ? <img src={profile.representativeImage} alt="대표사진" /> : <ImagePlus />}<label><input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} />{profile.representativeImage ? "대표사진 바꾸기" : "대표사진 추가"}</label></div><div><h2>사진은 위치를 자동으로 정합니다</h2><p>첫 사진은 표지, 나머지는 활동 갤러리에 원본 비율로 배치합니다.</p><label className="quick-add-photos"><input type="file" accept="image/*" multiple onChange={(event) => uploadImage(event, false, "activity")} /><Plus size={14} /> 활동사진 더 추가</label><small>현재 대표사진 {profile.representativeImage ? 1 : 0}장 · 활동사진 {profile.performanceImages.filter(Boolean).length}장</small></div></div></div>
+    <div className="quick-review-card"><div className="card-heading"><div><h2>찾아낸 경력·수상·공연</h2><p>초록색은 반영, 회색은 제외됩니다.</p></div><span>{reviewItems.length || realCareers.length}개 발견</span></div>{reviewItems.length ? <div className="fact-confirm-list">{reviewItems.map((item) => <article className={item.status === "excluded" ? "excluded" : "approved"} key={item.id}><div><span>{item.type === "award" ? "수상" : item.type === "performance" ? "공연" : item.type === "media" ? "보도" : "경력"}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><strong>{item.value}</strong></div><div><button className={item.status !== "excluded" ? "selected" : ""} onClick={() => setItemStatus(item.id, "approved")}><Check size={13} /> 맞아요</button><button className={item.status === "excluded" ? "selected exclude" : ""} onClick={() => setItemStatus(item.id, "excluded")}><X size={13} /> 제외</button></div></article>)}</div> : <div className="empty-facts"><FileText /><strong>아직 추출된 경력이 없습니다</strong><p>세부 설정에서 경력 한 줄만 추가해도 PPT를 만들 수 있어요.</p></div>}</div>
+    {!profile.introduction.trim() && <button className="quick-copy-button" disabled={busy || !profile.artistName.trim()} onClick={generate}>{busy ? <Loader2 className="spin" /> : <WandSparkles />} 자료로 소개문 자동 작성</button>}
+    {notice && <div className="notice warning quick-notice">{notice}</div>}
+    <details className="advanced-settings"><summary><PenLine size={15} /> 세부 정보·사진·디자인 직접 수정 <ChevronRight size={15} /></summary><div><InformationStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} notice={notice} /><ContentStep profile={profile} update={update} busy={busy} generate={generate} notice={notice} /><DesignStep profile={profile} update={update} /></div></details>
+    <div className="quick-build-bar"><div><strong>{profile.artistName || "아티스트"} 프로필 초안</strong><span>부족한 문구는 자동으로 보완한 뒤 미리보기를 만듭니다.</span></div><button disabled={busy || !profile.artistName.trim() || !profile.primaryField.trim()} onClick={() => void onBuild()}>{busy ? <><Loader2 className="spin" /> PPT 구성 중</> : <>PPT 미리보기 만들기 <ArrowRight size={16} /></>}</button></div>
+  </section>;
 }
 
 function SourceStep({ onSelect }: { onSelect: (source: SourceType) => void }) {
