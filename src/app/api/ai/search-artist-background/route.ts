@@ -17,6 +17,15 @@ interface SearchResult {
   sourceUrl: string;
 }
 
+interface IdentityInput {
+  primaryField?: string;
+  region?: string;
+  affiliation?: string;
+  activeSince?: string;
+  identityHint?: string;
+  officialUrl?: string;
+}
+
 const sourceConfigs: Array<{ source: ResearchSource; label: string; domain: string; verificationTier: "platform" | "reference" }> = [
   { source: "namuwiki", label: "나무위키", domain: "namu.wiki", verificationTier: "reference" },
   { source: "otr", label: "OTR", domain: "otr.co.kr", verificationTier: "platform" },
@@ -27,6 +36,9 @@ const reviewSchema = z.object({
   matches: z.array(z.object({
     id: z.string(),
     relevant: z.boolean(),
+    identityScore: z.number().min(0).max(1),
+    matchedSignals: z.array(z.string()).max(8),
+    conflicts: z.array(z.string()).max(8),
     reason: z.string(),
     facts: z.array(z.object({
       type: z.enum(["career", "performance", "award", "media", "introduction"]),
@@ -39,11 +51,12 @@ const reviewSchema = z.object({
   })),
 });
 
-async function searchSource(artistName: string, config: typeof sourceConfigs[number]): Promise<SearchResult[]> {
+async function searchSource(artistName: string, identity: IdentityInput, config: typeof sourceConfigs[number]): Promise<SearchResult[]> {
   const url = new URL("https://customsearch.googleapis.com/customsearch/v1");
   url.searchParams.set("key", process.env.GOOGLE_SEARCH_API_KEY || "");
   url.searchParams.set("cx", process.env.GOOGLE_SEARCH_ENGINE_ID || "");
-  url.searchParams.set("q", `"${artistName}" site:${config.domain}`);
+  const discriminator = identity.affiliation || identity.identityHint || identity.primaryField || identity.region || identity.activeSince || "";
+  url.searchParams.set("q", [`"${artistName}"`, discriminator.slice(0, 100), `site:${config.domain}`].filter(Boolean).join(" "));
   url.searchParams.set("safe", "active");
   url.searchParams.set("num", "5");
   const response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
@@ -71,14 +84,16 @@ async function searchSource(artistName: string, config: typeof sourceConfigs[num
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { artistName?: string; primaryField?: string; region?: string; careers?: Array<{ year?: string; title?: string; organization?: string }> };
+    const body = await request.json() as IdentityInput & { artistName?: string; careers?: Array<{ year?: string; title?: string; organization?: string }> };
     const artistName = body.artistName?.trim() || "";
     if (!artistName) return NextResponse.json({ error: "활동명을 먼저 입력해 주세요." }, { status: 400 });
+    const identity: IdentityInput = { primaryField: body.primaryField, region: body.region, affiliation: body.affiliation, activeSince: body.activeSince, identityHint: body.identityHint, officialUrl: body.officialUrl };
+    const identitySignalCount = Object.values(identity).filter((value) => value?.trim()).length;
+    if (identitySignalCount < 2) return NextResponse.json({ error: "동명이인 방지를 위해 활동 분야 외에 식별 정보를 한 가지 이상 입력해 주세요.", code: "IDENTITY_SIGNALS_REQUIRED" }, { status: 400 });
     if (!process.env.GOOGLE_SEARCH_API_KEY || !process.env.GOOGLE_SEARCH_ENGINE_ID) {
       return NextResponse.json({ error: "Google 검색 API가 설정되지 않았습니다.", code: "GOOGLE_SEARCH_NOT_CONFIGURED" }, { status: 503 });
     }
-
-    const searched = await Promise.allSettled(sourceConfigs.map((config) => searchSource(artistName, config)));
+    const searched = await Promise.allSettled(sourceConfigs.map((config) => searchSource(artistName, identity, config)));
     const sources = searched.flatMap((result) => result.status === "fulfilled" ? result.value : []).slice(0, 15);
     if (!sources.length) return NextResponse.json({ sources: [], message: "나무위키·OTR·쇼글에서 관련 공개 검색 결과를 찾지 못했습니다." });
 
@@ -90,7 +105,7 @@ export async function POST(request: Request) {
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
         const response = await ai.models.generateContent({
           model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
-          contents: [{ role: "user", parts: [{ text: `문화예술인 '${artistName}'의 공개 검색 결과를 검토하세요. 분야는 '${body.primaryField || "미지정"}', 지역은 '${body.region || "미지정"}'입니다. 기존 경력은 ${JSON.stringify(knownCareers)}입니다. 아래에는 Google 검색이 반환한 나무위키·OTR·쇼글의 제목과 검색 요약문만 있습니다. 이름이 같은 다른 사람일 수 있으므로 분야·기관·작품·지역이 맞지 않으면 relevant=false로 두세요. 검색 요약문에 명시된 사실만 facts로 구조화하고 추측하거나 새로운 경력·날짜·수상 내역을 만들지 마세요. 나무위키는 사용자 편집 참고 자료이므로 confidence를 최대 0.65로 제한하세요. OTR·쇼글도 플랫폼 등록 정보일 뿐 공식 증명은 아니므로 최대 0.78로 제한하세요. 각 사실은 사용자가 출처를 열어 확인해야 합니다. 검색 결과: ${JSON.stringify(sources)}` }] }],
+          contents: [{ role: "user", parts: [{ text: `문화예술인 '${artistName}'의 공개 검색 결과를 검토하세요. 사용자가 제공한 식별 정보는 ${JSON.stringify(identity)}이고 기존 경력은 ${JSON.stringify(knownCareers)}입니다. 아래에는 Google 검색이 반환한 나무위키·OTR·쇼글의 제목과 검색 요약문만 있습니다. 이름만 같다고 동일 인물로 판단하지 마세요. 분야·지역·소속·활동 시기·대표 경력·공식 링크 중 무엇이 일치하는지 matchedSignals에, 무엇이 충돌하는지 conflicts에 구체적으로 적고 identityScore를 0~1로 평가하세요. 공식 링크나 소속 일치는 강한 근거이며, 분야만 일치하는 것은 약한 근거입니다. conflicts가 하나라도 있거나 identityScore가 0.7 미만이면 relevant=false로 두세요. 검색 요약문에 명시된 사실만 facts로 구조화하고 추측하거나 새로운 경력·날짜·수상 내역을 만들지 마세요. 나무위키는 사용자 편집 참고 자료이므로 confidence를 최대 0.65로 제한하세요. OTR·쇼글도 플랫폼 등록 정보일 뿐 공식 증명은 아니므로 최대 0.78로 제한하세요. 각 사실은 사용자가 출처를 열어 확인해야 합니다. 검색 결과: ${JSON.stringify(sources)}` }] }],
           config: { responseMimeType: "application/json", responseJsonSchema: z.toJSONSchema(reviewSchema), temperature: 0.05 },
         });
         const parsed = reviewSchema.parse(JSON.parse(response.text || "{}"));
@@ -105,7 +120,10 @@ export async function POST(request: Request) {
       const review = reviews.get(source.id);
       return {
         ...source,
-        relevant: review?.relevant ?? false,
+        relevant: Boolean(review?.relevant && review.identityScore >= 0.7 && !review.conflicts.length),
+        identityScore: review?.identityScore ?? 0,
+        matchedSignals: review?.matchedSignals ?? [],
+        conflicts: review?.conflicts ?? [],
         reason: review?.reason || "출처 페이지에서 동일 인물과 사실 여부를 직접 확인해 주세요.",
         facts: review?.facts ?? [],
       };

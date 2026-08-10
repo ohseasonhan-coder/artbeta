@@ -101,6 +101,10 @@ export interface ProfileData {
   primaryField: string;
   secondaryField: string;
   region: string;
+  affiliation: string;
+  activeSince: string;
+  identityHint: string;
+  officialUrl: string;
   members: string;
   contact: string;
   videoUrl: string;
@@ -134,6 +138,10 @@ export const initialProfile: ProfileData = {
   primaryField: "",
   secondaryField: "",
   region: "",
+  affiliation: "",
+  activeSince: "",
+  identityHint: "",
+  officialUrl: "",
   members: "",
   contact: "",
   videoUrl: "",

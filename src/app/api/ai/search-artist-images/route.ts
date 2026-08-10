@@ -27,18 +27,20 @@ const matchSchema = z.object({
     relevanceScore: z.number().min(0).max(1),
     qualityScore: z.number().min(0).max(1),
     recommended: z.boolean(),
+    identityScore: z.number().min(0).max(1).default(0),
+    identityConflicts: z.array(z.string()).max(8).default([]),
     watermarkDetected: z.boolean().default(false),
     rightsRisk: z.enum(["low", "unknown", "high"]).default("unknown"),
     reason: z.string(),
   })),
 });
 
-function buildQueries(artistName: string, primaryField: string, region: string, careers: Array<{ title?: string; organization?: string }>) {
-  const base = [`"${artistName}"`, primaryField, region, "공식 공연 아티스트"].filter(Boolean).join(" ");
+function buildQueries(artistName: string, primaryField: string, region: string, affiliation: string, identityHint: string, activeSince: string, officialUrl: string, careers: Array<{ title?: string; organization?: string }>) {
+  const base = [`"${artistName}"`, affiliation || identityHint || primaryField, region, activeSince, officialUrl, "공식 공연 아티스트"].filter(Boolean).join(" ");
   const careerQueries = careers
     .filter((career) => career.title?.trim() || career.organization?.trim())
     .slice(0, 2)
-    .map((career) => [`"${artistName}"`, career.title, career.organization, primaryField].filter(Boolean).join(" "));
+    .map((career) => [`"${artistName}"`, affiliation, career.title, career.organization, primaryField].filter(Boolean).join(" "));
   return [...new Set([base, ...careerQueries])].slice(0, 3);
 }
 
@@ -149,7 +151,7 @@ async function downloadImage(candidate: Candidate): Promise<Candidate | null> {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { artistName?: string; primaryField?: string; region?: string; referenceImage?: string; careers?: Array<{ title?: string; organization?: string }> };
+    const body = await request.json() as { artistName?: string; primaryField?: string; region?: string; affiliation?: string; activeSince?: string; identityHint?: string; officialUrl?: string; referenceImage?: string; careers?: Array<{ title?: string; organization?: string }> };
     const artistName = body.artistName?.trim() || "";
     if (!artistName || !body.referenceImage?.startsWith("data:image/")) {
       return NextResponse.json({ error: "아티스트명과 대표사진이 필요합니다." }, { status: 400 });
@@ -163,7 +165,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "웹 이미지 검색 API가 설정되지 않았습니다.", code: "SEARCH_NOT_CONFIGURED" }, { status: 503 });
     }
 
-    const queries = buildQueries(artistName, body.primaryField || "", body.region || "", body.careers ?? []);
+    const queries = buildQueries(artistName, body.primaryField || "", body.region || "", body.affiliation || "", body.identityHint || "", body.activeSince || "", body.officialUrl || "", body.careers ?? []);
     const searched = await Promise.allSettled(queries.flatMap((query, queryIndex) => [searchNaver(query, queryIndex), searchGoogle(query, queryIndex), searchYoutube(query, queryIndex)]));
     const unique = new Map<string, Candidate>();
     searched.forEach((result) => {
@@ -172,11 +174,12 @@ export async function POST(request: Request) {
     const downloaded = (await Promise.all([...unique.values()].slice(0, 18).map(downloadImage))).filter((candidate): candidate is Candidate & { dataUrl: string } => Boolean(candidate?.dataUrl)).slice(0, 10);
     if (!downloaded.length) return NextResponse.json({ error: "검색 결과 이미지를 불러오지 못했습니다." }, { status: 502 });
 
-    let scores = new Map<string, { relevanceScore: number; qualityScore: number; recommended: boolean; watermarkDetected: boolean; rightsRisk: "low" | "unknown" | "high"; reason: string }>();
+    let scores = new Map<string, { relevanceScore: number; qualityScore: number; recommended: boolean; identityScore: number; identityConflicts: string[]; watermarkDetected: boolean; rightsRisk: "low" | "unknown" | "high"; reason: string }>();
     if (process.env.GEMINI_API_KEY) {
       try {
       const reference = body.referenceImage.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
       const parts: Part[] = [{ text: `문화예술인 웹 이미지 후보를 검수합니다. 검색 대상은 '${artistName}'이며 분야는 '${body.primaryField || "미지정"}'입니다. 첫 이미지는 사용자가 직접 등록한 참고 사진이고, 이후 이미지는 검색 후보입니다. 얼굴 생체인증이나 동일인 확정을 하지 마세요. 검색 제목·출처의 이름 일치, 개인/단체 구성, 활동 분야와 무대 맥락, 해상도와 구도를 평가하세요. 이미지의 모서리·중앙·반복 패턴에 워터마크, 스톡 사이트 마크, 언론사 로고, 저작권자 서명 또는 큰 텍스트 오버레이가 있으면 watermarkDetected=true와 rightsRisk=high로 지정하고 recommended=false로 두세요. 사용 허가가 불명확하면 rightsRisk=unknown으로 지정하세요. 추천은 관련성이 높고 워터마크가 없으며 출처 페이지에서 사용 권한을 확인할 수 있는 후보에만 허용하세요. 타인 가능성이 있으면 recommended=false로 두고 사용자가 최종 확인해야 한다고 reason에 적으세요.` }];
+      parts.push({ text: `동명이인 판별 단서: 지역=${body.region || "미입력"}, 소속=${body.affiliation || "미입력"}, 활동 시작=${body.activeSince || "미입력"}, 대표 경력=${body.identityHint || "미입력"}, 공식 링크=${body.officialUrl || "미입력"}. 후보마다 이름 외 단서가 얼마나 일치하는지 identityScore로 평가하고 충돌은 identityConflicts에 적으세요. 소속·분야·지역·활동 시기 중 명확한 충돌이 있거나 identityScore가 0.7 미만이면 recommended=false로 두세요.` });
       if (reference) parts.push({ text: "사용자 등록 참고 사진" }, { inlineData: { mimeType: reference[1], data: reference[2] } });
       downloaded.forEach((candidate) => {
         const match = candidate.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
@@ -199,9 +202,9 @@ export async function POST(request: Request) {
     const candidates = downloaded.map((candidate) => {
       const fallbackQuality = candidate.width >= 800 || candidate.height >= 800 ? 0.78 : 0.58;
       const fallbackRelevance = candidate.title.toLowerCase().includes(artistName.toLowerCase()) ? 0.76 : 0.55;
-      const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, watermarkDetected: false, rightsRisk: "unknown" as const, reason: "검색 문맥만 확인됨 · 출처와 사용 권한을 직접 확인해야 합니다." };
+      const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, identityScore: 0, identityConflicts: [], watermarkDetected: false, rightsRisk: "unknown" as const, reason: "검색 문맥만 확인됨 · 동일 인물과 사용 권한을 직접 확인해야 합니다." };
       const usageStatus = score.watermarkDetected || score.rightsRisk === "high" ? "blocked" : score.recommended && score.rightsRisk === "low" ? "approved" : "review";
-      return { ...candidate, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved" && score.relevanceScore >= 0.72 && score.qualityScore >= 0.65, reason: score.reason };
+      return { ...candidate, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, identityScore: score.identityScore, identityConflicts: score.identityConflicts, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved" && score.identityScore >= 0.7 && !score.identityConflicts.length && score.relevanceScore >= 0.72 && score.qualityScore >= 0.65, reason: score.reason };
     }).sort((a, b) => Number(b.recommended) - Number(a.recommended) || (b.relevanceScore + b.qualityScore) - (a.relevanceScore + a.qualityScore));
 
     return NextResponse.json({ query: queries.join(" | "), configuredSources, candidates });

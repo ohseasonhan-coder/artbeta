@@ -195,7 +195,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     eyebrow: "BOOKING & CONTACT",
     title: "공연·행사 섭외를 문의해 주세요",
     body: [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "),
-    bullets: [profile.contact || "연락 가능한 전화번호 또는 이메일을 입력해 주세요", profile.videoUrl].filter(Boolean),
+    bullets: [profile.contact || "연락 가능한 전화번호 또는 이메일을 입력해 주세요", profile.videoUrl || profile.officialUrl].filter(Boolean),
     imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial",
   };
   return { narrative: "정체성, 현장 이미지, 검증된 경력, 섭외 문의 순서로 빠르게 설득", visualDirection: "짧은 문구와 실제 공연 이미지 중심", slides: paginateSlideCopy([...slides, contact]).map(fitSlideCopy) };
@@ -229,6 +229,10 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
     primaryField: profile.primaryField,
     secondaryField: profile.secondaryField,
     region: profile.region,
+    affiliation: profile.affiliation,
+    activeSince: profile.activeSince,
+    identityHint: profile.identityHint,
+    officialUrl: profile.officialUrl,
     members: profile.members,
     contact: profile.contact,
     videoUrl: profile.videoUrl,
@@ -388,7 +392,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       slide.addText(slidePlan.title || "공연·행사 섭외를 문의해 주세요", { x: 0.78, y: 1.35, w: 8.9, h: 1.15, fontSize: 42, bold: true, color: hex(p.text), margin: 0 });
       slide.addText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), { x: 0.82, y: 2.85, w: 8.7, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0 });
       const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "연락 가능한 전화번호 또는 이메일을 입력해 주세요";
-      const videoUrl = normalizeVideoUrl(profile.videoUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
+      const videoUrl = normalizeVideoUrl(profile.videoUrl || profile.officialUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
       slide.addText("CONTACT", { x: 0.82, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
       slide.addText(contactText, { x: 2.25, y: 3.94, w: 9.7, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false });
       if (videoUrl) {

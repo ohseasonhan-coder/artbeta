@@ -10,6 +10,10 @@ const requestSchema = z.object({
   artistName: z.string().trim().min(1).max(100),
   primaryField: z.string().trim().max(100).default(""),
   region: z.string().trim().max(100).default(""),
+  affiliation: z.string().trim().max(160).default(""),
+  activeSince: z.string().trim().max(40).default(""),
+  identityHint: z.string().trim().max(400).default(""),
+  officialUrl: z.string().trim().max(500).default(""),
   introduction: z.string().trim().max(1200).default(""),
   referenceImage: z.string().startsWith("data:image/").max(5_000_000),
   careers: z.array(z.object({
@@ -66,7 +70,8 @@ export async function POST(request: Request) {
       const basis: string = item.careerHint || factualCareers[generated.length % Math.max(1, factualCareers.length)] || `${body.primaryField} 활동`;
       const prompt = [
         "Create one premium editorial portfolio image for a Korean cultural artist presentation.",
-        `Artist name: ${body.artistName}. Field: ${body.primaryField || "cultural arts"}. Region: ${body.region || "Korea"}.`,
+        `Artist name: ${body.artistName}. Field: ${body.primaryField || "cultural arts"}. Region: ${body.region || "Korea"}. Affiliation: ${body.affiliation || "not provided"}. Active since: ${body.activeSince || "not provided"}.`,
+        body.identityHint ? `Verified identity/career hint: ${body.identityHint}.` : "",
         `Requested scene: ${item.purpose}. Verified profile basis: ${basis}.`,
         body.introduction ? `Profile tone: ${body.introduction.slice(0, 420)}.` : "",
         "Use the attached user-provided portrait only as the identity and appearance reference. Preserve recognizable facial features, approximate age, hairstyle, and overall styling without beautifying into a different person.",
