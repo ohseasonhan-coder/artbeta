@@ -67,7 +67,7 @@ export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   return assets;
 }
 
-export function selectPortfolioAssets(assets: VisualAsset[], limit = 4) {
+export function selectPortfolioAssets(assets: VisualAsset[], limit = 8) {
   const representative = assets.find((asset) => asset.kind === "representative");
   const originScore = { upload: 88, web: 82, pdf: 74, ai: 58, representative: 100 } as const;
   const candidates = assets.filter((asset) => asset !== representative).sort((a, b) => {
@@ -211,6 +211,7 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
   const normalizedCoverIndex = slides.findIndex((slide) => slide.type === "cover");
   slides[normalizedCoverIndex].imageRefs = [assets[0].id];
 
+  let primaryAboutIndex = -1;
   if (assets[1]) {
     let aboutIndex = slides.findIndex((slide) => slide.type === "about");
     if (aboutIndex < 0) {
@@ -218,6 +219,7 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
       aboutIndex = normalizedCoverIndex + 1;
     }
     slides[aboutIndex].imageRefs = [assets[1].id];
+    primaryAboutIndex = aboutIndex;
   }
 
   const requiredGalleryAssets = assets.slice(2, 4);
@@ -230,7 +232,15 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
   const allowedGalleryIndexes = new Set(galleryIndexes.slice(0, requiredGalleryAssets.length));
   slides = slides.filter((slide, index) => slide.type !== "gallery" || allowedGalleryIndexes.has(index));
   galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
-  galleryIndexes.forEach((slideIndex, index) => { slides[slideIndex].imageRefs = requiredGalleryAssets[index] ? [requiredGalleryAssets[index].id] : []; });
+  let nextAssetIndex = assets[1] ? 2 : 1;
+  slides.forEach((slide, index) => {
+    if (slide.type === "cover" || index === primaryAboutIndex) return;
+    const asset = assets[nextAssetIndex % assets.length];
+    slide.imageRefs = asset ? [asset.id] : [];
+    slide.imagePurpose ||= slide.type === "career" ? "해당 활동과 연결되는 현장 사진" : slide.type === "contact" ? "아티스트를 기억하게 만드는 마무리 사진" : "페이지 메시지를 뒷받침하는 활동 사진";
+    slide.layout = index % 2 ? "split_right" : "split_left";
+    nextAssetIndex += 1;
+  });
   return { ...plan, slides };
 }
 
@@ -316,10 +326,9 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   pptx.theme = { headFontFace: "Aptos Display", bodyFontFace: "Aptos" };
 
   const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
-  const usedAssets = new Set<string>();
   const pickImages = (slidePlan: DeckSlidePlan) => slidePlan.imageRefs
-    .filter((id) => assetMap.has(id) && !usedAssets.has(id))
-    .map((id) => { usedAssets.add(id); return assetMap.get(id)!; });
+    .filter((id) => assetMap.has(id))
+    .map((id) => assetMap.get(id)!);
   const addImage = (slide: ReturnType<typeof pptx.addSlide>, asset: VisualAsset, x: number, y: number, w: number, h: number, alt: string, mode: "contain" | "cover" = "contain") => {
     if (mode === "contain") slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: { color: hex(p.surface) }, line: { color: hex(p.muted), transparency: 85, width: 0.5 } });
     slide.addImage({ data: asset.dataUrl, x, y, w, h, sizing: { type: mode, w, h }, altText: alt || `${profile.artistName} 활동 이미지` });
@@ -369,25 +378,17 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "career") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 7.25, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      else addImagePlaceholder(slide, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose || "해당 경력과 연결되는 활동 사진");
       const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 6);
-      const twoColumns = selected.length > 3;
-      const perColumn = Math.ceil(selected.length / 2);
-      const longestTitle = Math.max(0, ...selected.map((item) => formatCareerFact(item, twoColumns).title.length));
-      const titleFontSize = 16;
       selected.forEach((item, index) => {
-        const display = formatCareerFact(item, twoColumns);
-        const column = twoColumns ? Math.floor(index / perColumn) : 0;
-        const row = twoColumns ? index % perColumn : index;
-        const x = twoColumns ? 0.82 + column * 6.15 : 0.82;
-        const y = twoColumns ? 2.08 + row * 1.38 : 2.02 + row * 0.9;
-        const dateWidth = twoColumns ? 0.72 : 1.25;
-        const textX = x + (twoColumns ? 0.88 : 1.43);
-        const textWidth = twoColumns ? 4.92 : 10.05;
-        slide.addText(display.date, { x, y, w: dateWidth, h: 0.36, fontSize: 16, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addText(display.title, { x: textX, y: y - 0.03, w: textWidth, h: 0.52, fontSize: titleFontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-        if (display.meta) slide.addText(display.meta, { x: textX, y: y + 0.55, w: textWidth, h: 0.32, fontSize: 12, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
-        slide.addShape(pptx.ShapeType.line, { x: textX, y: y + (twoColumns ? 1.08 : 0.78), w: textWidth, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
+        const display = formatCareerFact(item, false);
+        const y = 2.05 + index * 0.78;
+        slide.addText(display.date, { x: 0.82, y, w: 0.85, h: 0.32, fontSize: 14, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });
+        slide.addText(display.title, { x: 1.82, y: y - 0.03, w: 6.25, h: 0.34, fontSize: 14, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
+        if (display.meta) slide.addText(display.meta, { x: 1.82, y: y + 0.32, w: 6.25, h: 0.23, fontSize: 10, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
+        slide.addShape(pptx.ShapeType.line, { x: 1.82, y: y + 0.63, w: 6.25, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
       return;
@@ -395,18 +396,20 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "contact") {
       addEyebrow(slide, "BOOKING & CONTACT");
-      slide.addText(slidePlan.title || "공연·행사 섭외를 문의해 주세요", { x: 0.78, y: 1.35, w: 8.9, h: 1.15, fontSize: 42, bold: true, color: hex(p.text), margin: 0 });
-      slide.addText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), { x: 0.82, y: 2.85, w: 8.7, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0 });
+      if (primaryImage) addImage(slide, primaryImage, 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      else addImagePlaceholder(slide, 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose || "아티스트를 기억하게 만드는 마무리 사진");
+      slide.addText(slidePlan.title || "공연·행사 섭외를 문의해 주세요", { x: 0.78, y: 1.35, w: 7.15, h: 1.15, fontSize: 42, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), { x: 0.82, y: 2.85, w: 7.1, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0 });
       const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "연락 가능한 전화번호 또는 이메일을 입력해 주세요";
       const videoUrl = normalizeVideoUrl(profile.videoUrl || profile.officialUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
       slide.addText("CONTACT", { x: 0.82, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
-      slide.addText(contactText, { x: 2.25, y: 3.94, w: 9.7, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false });
+      slide.addText(contactText, { x: 2.25, y: 3.94, w: 5.65, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
       if (videoUrl) {
         const videoLabel = isYouTubeVideoUrl(videoUrl) ? "▶  YouTube 대표 영상 바로 보기" : "▶  대표 영상 바로 보기";
         slide.addText("VIDEO", { x: 0.82, y: 5.14, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
         slide.addShape(pptx.ShapeType.roundRect, { x: 2.25, y: 4.88, w: 4.25, h: 0.68, rectRadius: 0.08, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 }, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
         slide.addText(videoLabel, { x: 2.55, y: 5.08, w: 3.72, h: 0.25, fontSize: 16, bold: true, color: "FFFFFF", margin: 0, align: "center", breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
-        slide.addText(compactText(videoUrl, 62), { x: 6.8, y: 5.05, w: 5.0, h: 0.28, fontSize: 11, color: hex(p.muted), margin: 0, breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" }, underline: { color: hex(p.muted) } });
+        slide.addText(compactText(videoUrl, 42), { x: 6.65, y: 5.05, w: 1.25, h: 0.28, fontSize: 9, color: hex(p.muted), margin: 0, breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" }, underline: { color: hex(p.muted) }, fit: "shrink" });
       }
       slide.addText("일정과 행사 정보를 보내주시면 맞춤 구성으로 답변드리겠습니다.", { x: 0.82, y: 6.48, w: 9.2, h: 0.35, fontSize: 14, color: hex(p.muted), margin: 0 });
       addFooter(slide, slideIndex + 1);
@@ -415,13 +418,15 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "strengths") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.7, h: 0.75, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 7.2, h: 0.75, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      else addImagePlaceholder(slide, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose || "핵심 강점을 보여주는 활동 사진");
       const bullets = slidePlan.bullets.length ? slidePlan.bullets : profile.generatedStrengths;
       bullets.slice(0, 3).forEach((item, index) => {
-        const x = 0.82 + index * 4.08;
-        slide.addText(`0${index + 1}`, { x, y: 2.45, w: 0.7, h: 0.45, fontSize: 16, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addShape(pptx.ShapeType.line, { x, y: 3.02, w: 3.45, h: 0, line: { color: hex(p.accent), width: 1.2 } });
-        slide.addText(item, { x, y: 3.42, w: 3.45, h: 1.45, fontSize: 24, bold: true, color: hex(p.text), margin: 0, valign: "middle" });
+        const y = 2.35 + index * 1.35;
+        slide.addText(`0${index + 1}`, { x: 0.82, y, w: 0.55, h: 0.35, fontSize: 15, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addShape(pptx.ShapeType.line, { x: 1.52, y: y + 0.16, w: 0.65, h: 0, line: { color: hex(p.accent), width: 1.2 } });
+        slide.addText(item, { x: 2.42, y: y - 0.12, w: 5.55, h: 0.75, fontSize: 21, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       });
       addFooter(slide, slideIndex + 1);
       return;
