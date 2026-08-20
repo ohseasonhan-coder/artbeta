@@ -18,9 +18,14 @@ export interface DeckFact {
 
 function shortenAtWord(value: string, max: number) {
   if (value.length <= max) return value;
-  const candidate = value.slice(0, max - 1);
-  const breakAt = candidate.lastIndexOf(" ");
-  return `${candidate.slice(0, breakAt > max * 0.6 ? breakAt : max - 1).trim()}…`;
+  const words = value.replace(/\s+/g, " ").trim().split(" ");
+  let result = "";
+  for (const word of words) {
+    const next = result ? `${result} ${word}` : word;
+    if (next.length > max - 1) break;
+    result = next;
+  }
+  return result ? `${result.replace(/[.,·;:!?-]+$/, "").trim()}…` : words[0];
 }
 
 export function formatCareerFact(fact: DeckFact, compact = false) {

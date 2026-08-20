@@ -66,48 +66,14 @@ const copyBudgets = {
 function compactText(value: string, max: number) {
   const text = value.replace(/\s+/g, " ").trim();
   if (!max || text.length <= max) return max ? text : "";
-  const candidate = text.slice(0, max - 1);
-  const breakAt = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf(" · "), candidate.lastIndexOf(" "));
-  return `${candidate.slice(0, breakAt > max * 0.55 ? breakAt : max - 1).trim()}…`;
-}
-
-function splitText(value: string, max: number) {
-  const chunks: string[] = [];
-  let rest = value.replace(/\s+/g, " ").trim();
-  if (!rest || !max) return rest ? [rest] : [];
-  while (rest.length > max) {
-    const candidate = rest.slice(0, max + 1);
-    const breakAt = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf("다. "), candidate.lastIndexOf(" · "), candidate.lastIndexOf(" "));
-    const cut = breakAt > max * 0.55 ? breakAt + (candidate.slice(breakAt, breakAt + 2) === ". " ? 1 : 0) : max;
-    chunks.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
+  const words = text.split(" ");
+  let result = "";
+  for (const word of words) {
+    const next = result ? `${result} ${word}` : word;
+    if (next.length > max - 1) break;
+    result = next;
   }
-  if (rest) chunks.push(rest);
-  return chunks;
-}
-
-function paginateSlide(slide: z.infer<typeof slideSchema>) {
-  const budget = copyBudgets[slide.type];
-  const bodyLimit = budget.body;
-  const bodyChunks = bodyLimit ? splitText(slide.body, bodyLimit) : slide.body ? [slide.body] : [];
-  const bulletChunks = budget.bullet
-    ? slide.type === "contact"
-      ? slide.bullets.slice(0, 2).map((item) => compactText(item, budget.bullet))
-      : slide.bullets.flatMap((item) => splitText(item, budget.bullet))
-    : [];
-  const pageCount = Math.max(1, bodyChunks.length, budget.bullets ? Math.ceil(bulletChunks.length / budget.bullets) : 1);
-  if (pageCount === 1) return [slide];
-  return Array.from({ length: pageCount }, (_, index): z.infer<typeof slideSchema> => ({
-    ...slide,
-    type: slide.type === "cover" && index > 0 ? "about" : slide.type,
-    eyebrow: index ? `${slide.eyebrow || "PROFILE"} · CONTINUED` : slide.eyebrow,
-    title: index ? `${compactText(slide.title, 26)} · 계속` : slide.title,
-    body: bodyChunks[index] || "",
-    bullets: budget.bullets ? bulletChunks.slice(index * budget.bullets, index * budget.bullets + budget.bullets) : [],
-    imageRefs: index ? [] : slide.imageRefs,
-    imagePurpose: index ? "" : slide.imagePurpose,
-    layout: index ? "editorial" : slide.layout,
-  }));
+  return result ? `${result.replace(/[.,·;:!?-]+$/, "").trim()}…` : words[0];
 }
 
 export async function POST(request: Request) {
@@ -122,11 +88,14 @@ export async function POST(request: Request) {
     const galleryVisualAssets = visualAssets.slice(2);
     const requestedPageCount = Math.max(5, Math.min(8, Number(body.profile.requestedPageCount) || 6));
     const facts = Array.isArray(body.profile.careers) ? body.profile.careers as Array<{ index?: number; category?: string }> : [];
-    const requiredCareerSlides = Math.max(1, Math.ceil(facts.length / 6));
-    const requiredGallerySlides = Math.min(2, galleryVisualAssets.length);
-    const targetPageCount = Math.min(32, Math.max(requestedPageCount, 4 + requiredCareerSlides + requiredGallerySlides));
+    const factIndexOf = (fact: { index?: number }, position: number) => Number.isInteger(fact.index) ? Number(fact.index) : position;
+    const factsByIndex = new Map(facts.map((fact, position) => [factIndexOf(fact, position), fact]));
+    const validFactIndexes = new Set(factsByIndex.keys());
+    const requiredCareerSlides = Math.max(1, Math.min(2, Math.ceil(facts.length / 6)));
+    const requiredGallerySlides = Math.min(2, galleryVisualAssets.length, Math.max(0, requestedPageCount - 4 - requiredCareerSlides));
+    const targetPageCount = requestedPageCount;
     const parts: Part[] = [{
-      text: `당신은 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 사진 모음이나 활동 자료집이 아니라, 담당자가 이 예술인을 기억하고 바로 섭외하도록 만드는 심플하고 강한 PPT를 기획하세요.\n\n커뮤니케이션 목표: 담당자가 예술인의 정체성, 대표 무대, 검증된 활동을 빠르게 이해하고 마지막 장에서 바로 문의하게 만듭니다.\n\n중요: careers는 직접 입력한 경력과 PDF에서 추출해 승인한 수상·공연·활동·언론 사실을 합친 전체 근거입니다. 모든 인덱스를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 강점을 구체화하는 근거로만 사용합니다. 전달된 이미지는 앱이 최대 8장으로 선별한 최종 자산입니다.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- 모든 슬라이드에 이미지 1장을 배치합니다. 이미지 수가 페이지보다 적을 때만 관련도가 높은 사진을 반복 사용할 수 있으며, 콜라주는 만들지 않습니다.\n- 이미지가 2장 이상이면 about 슬라이드를 반드시 포함합니다. gallery 타입은 사진 갤러리가 아니라 '대표 장면' 슬라이드이며 정확히 ${requiredGallerySlides}장 사용합니다.\n- 경력·강점·연락처 페이지도 글을 왼쪽, 이미지를 오른쪽에 두는 균형 잡힌 분할 레이아웃을 사용합니다.\n- career 슬라이드는 최소 ${requiredCareerSlides}장이며 한 장당 최대 6개입니다. careers의 0~${Math.max(0, facts.length - 1)} 인덱스를 중복·누락 없이 담습니다.\n- 한 슬라이드는 하나의 주장만 전달합니다. 같은 소개·수식어를 반복하지 않습니다.\n- 제목은 분류명이 아니라 실제 활동 근거에서 나온 짧고 구체적인 결론으로 씁니다.\n- 표지는 활동명과 한 줄 태그라인만 둡니다.\n- 사진은 배경이나 콜라주로 쓰지 않고 독립 프레임에 배치합니다. 사진은 자연스럽게 크롭하고, 포스터·그래픽은 전체를 표시합니다.\n- 경력은 careerIndexes로만 연결하며 사실을 만들거나 과장하지 않습니다.\n- contact는 행동을 요청하는 제목, 실제 연락처와 대표 영상 링크만 담습니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음, 이미지 정확히 1개\n- career: title 32자, body·bullets 없음, 근거 최대 6개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
+      text: `당신은 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 사진 모음이나 활동 자료집이 아니라, 제안서를 받는 고객이 이 예술인을 선택해야 하는 이유를 빠르게 이해하고 문의하도록 만드는 심플하고 강한 PPT를 기획하세요.\n\n커뮤니케이션 목표: ${String(body.profile.purpose || "공연·행사 제안")} 담당자가 예술인의 정체성, 고객이 얻게 될 현장 가치, 검증된 활동을 이해하고 마지막 장에서 바로 문의하게 만듭니다. 모든 문장은 아티스트가 아니라 제안받는 고객의 판단을 돕는 언어로 작성합니다.\n\n중요: careers는 직접 입력한 경력과 PDF·외부 링크에서 추출해 승인한 수상·공연·활동·언론 중 고객 설득력이 높은 대표 근거입니다. 전달된 모든 career의 원래 index를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 강점을 구체화하는 참고 근거로 사용하되, 자료를 나열하거나 페이지 수를 늘리지 마세요. 전달된 이미지는 사용자 자료, PDF·PPTX에서 분리한 원본 이미지, 승인된 웹 이미지와 AI 연출 이미지입니다.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- 같은 imageRefs ID를 두 슬라이드에 절대 반복하지 않습니다. 사진이 부족하면 imageRefs를 비우고 imagePurpose에 고객이 준비할 사진을 구체적으로 씁니다.\n- 이미지가 2장 이상이면 about 슬라이드를 반드시 포함합니다. gallery 타입은 사진 갤러리가 아니라 고객에게 한 가지 현장 가치를 증명하는 '대표 장면'이며 정확히 ${requiredGallerySlides}장 사용합니다.\n- 경력·강점·연락처 페이지도 글을 왼쪽, 이미지를 오른쪽에 두는 균형 잡힌 분할 레이아웃을 사용합니다.\n- career 슬라이드는 정확히 ${requiredCareerSlides}장이며 한 장당 최대 6개입니다. 전달된 careers의 원래 index ${JSON.stringify([...validFactIndexes])}를 중복·누락 없이 담습니다.\n- 한 슬라이드는 고객의 질문 하나에 답합니다: 어떤 아티스트인가, 고객 행사에 어떤 가치를 주는가, 무엇으로 검증됐는가, 어떻게 섭외하는가.\n- 강점은 추상적인 자기소개가 아니라 고객 관점의 효과와 선택 근거로 번역합니다. 확인되지 않은 성과는 만들지 않습니다.\n- 제목은 분류명이 아니라 실제 활동 근거가 고객의 선택에 주는 의미를 짧고 구체적인 결론으로 씁니다. 같은 소개·수식어를 반복하지 않습니다.\n- 표지는 활동명과 고객이 기억할 한 줄 가치만 둡니다.\n- 사진은 배경이나 콜라주로 쓰지 않고 독립 프레임에 배치합니다. 사진은 자연스럽게 크롭하고, 포스터·그래픽은 전체를 표시합니다.\n- 경력은 careerIndexes로만 연결하며 사실을 만들거나 과장하지 않습니다.\n- contact는 고객의 다음 행동을 요청하는 제목, 실제 연락처와 대표 영상 링크만 담습니다.\n- 텍스트가 길면 단어 중간을 자르지 말고 띄어쓰기 경계에서 다음 페이지로 넘깁니다. 글자가 슬라이드 밖으로 나가는 것은 절대 금지입니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음, 이미지 정확히 1개\n- career: title 32자, body·bullets 없음, 근거 최대 6개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
     }];
 
     assets.forEach((asset) => {
@@ -166,7 +135,7 @@ export async function POST(request: Request) {
     plan.slides = plan.slides.filter((slide) => slide.type !== "gallery" || galleryCount++ < requiredGallerySlides);
     let gallerySlides = plan.slides.filter((slide) => slide.type === "gallery");
     while (gallerySlides.length < requiredGallerySlides) {
-      plan.slides.splice(plan.slides.length - 1, 0, { type: "gallery", eyebrow: "SIGNATURE MOMENT", title: gallerySlides.length ? "무대가 남긴 또 하나의 장면" : "이 무대를 기억하게 만드는 순간", body: "", bullets: [], imageRefs: [], imagePurpose: "대표 활동을 한눈에 보여주는 강한 사진 한 장", careerIndexes: [], layout: "gallery" });
+      plan.slides.splice(plan.slides.length - 1, 0, { type: "gallery", eyebrow: "SIGNATURE MOMENT", title: gallerySlides.length ? "다양한 현장에서도 일관된 완성도를 보여줍니다" : "현장 경험이 행사의 몰입도로 이어집니다", body: "", bullets: [], imageRefs: [], imagePurpose: "고객이 현장 규모와 완성도를 판단할 수 있는 대표 활동 사진", careerIndexes: [], layout: "gallery" });
       gallerySlides = plan.slides.filter((slide) => slide.type === "gallery");
     }
     let careerCount = 0;
@@ -179,17 +148,17 @@ export async function POST(request: Request) {
     }
 
     const categoryPriority: Record<string, number> = { award: 0, performance: 1, media: 2, career: 3 };
-    const factIndexes = facts.map((fact, index) => ({ index, priority: categoryPriority[fact.category || "career"] ?? 3 })).sort((a, b) => a.priority - b.priority).map(({ index }) => index);
+    const factIndexes = facts.map((fact, position) => ({ index: factIndexOf(fact, position), priority: categoryPriority[fact.category || "career"] ?? 3 })).sort((a, b) => a.priority - b.priority).map(({ index }) => index);
     const careerTitleCounts: Record<string, number> = {};
     const careerTitles: Record<string, string[]> = {
-      award: ["수상으로 확인된 전문성", "선정과 성과가 만든 신뢰"],
-      performance: ["주요 무대에서 쌓은 경험", "현장에서 이어온 활동"],
-      media: ["방송과 언론이 기록한 활동", "대외 기록으로 확인된 이력"],
-      career: ["지속적으로 이어온 주요 경력", "다음 활동으로 연결된 이력"],
+      award: ["수상과 선정 이력이 전문성을 증명합니다", "공식 성과가 제안의 신뢰를 높입니다"],
+      performance: ["다양한 무대 경험이 안정적인 진행을 뒷받침합니다", "현장 경험이 고객의 행사 완성도로 이어집니다"],
+      media: ["대외 기록이 검증된 활동을 보여줍니다", "방송과 언론 이력이 선택 근거를 더합니다"],
+      career: ["이어온 활동이 안정적인 협업을 뒷받침합니다", "검증된 이력이 다음 무대의 신뢰가 됩니다"],
     };
     careerSlides.forEach((slide, index) => {
       const indexes = factIndexes.slice(index * 6, index * 6 + 6);
-      const categories = new Set(indexes.map((factIndex) => facts[factIndex]?.category));
+      const categories = new Set(indexes.map((factIndex) => factsByIndex.get(factIndex)?.category));
       slide.careerIndexes = indexes;
       slide.eyebrow = categories.has("award") ? "AWARDS & RECOGNITION" : categories.has("performance") ? "SELECTED ACTIVITIES" : categories.has("media") ? "MEDIA & PRESS" : "SELECTED HISTORY";
       const primaryCategory = categories.has("award") ? "award" : categories.has("performance") ? "performance" : categories.has("media") ? "media" : "career";
@@ -202,23 +171,42 @@ export async function POST(request: Request) {
       slide.layout = "timeline";
     });
 
+    while (plan.slides.length > targetPageCount) {
+      const removableIndex = plan.slides.findIndex((slide, index) => index > 0 && index < plan.slides.length - 1
+        && slide.type !== "career"
+        && (slide.type !== "gallery" || plan.slides.filter((item) => item.type === "gallery").length > requiredGallerySlides));
+      if (removableIndex < 0) break;
+      plan.slides.splice(removableIndex, 1);
+    }
+    while (plan.slides.length < targetPageCount) {
+      plan.slides.splice(plan.slides.length - 1, 0, {
+        type: "strengths",
+        eyebrow: "CUSTOMER VALUE",
+        title: "행사 목적에 맞춘 협업이 완성도를 높입니다",
+        body: "",
+        bullets: Array.isArray(body.profile.strengths) ? body.profile.strengths.map(String).slice(0, 3) : [],
+        imageRefs: [],
+        imagePurpose: "행사 담당자가 현장 적합성을 판단할 수 있는 대표 활동 사진",
+        careerIndexes: [],
+        layout: "editorial",
+      });
+    }
+
     const validIds = new Set(assets.map((asset) => asset.id));
-    const cover = plan.slides.find((slide) => slide.type === "cover");
-    const about = plan.slides.find((slide) => slide.type === "about");
     const contact = plan.slides.at(-1)!;
     gallerySlides = plan.slides.filter((slide) => slide.type === "gallery");
     const primaryAboutIndex = plan.slides.findIndex((slide) => slide.type === "about");
     let nextImageIndex = 0;
     plan.slides.forEach((slide, index) => {
       const preferredIndex = slide.type === "cover" ? 0 : index === primaryAboutIndex && visualAssets[1] ? 1 : nextImageIndex;
-      const selected = visualAssets.length ? visualAssets[preferredIndex % visualAssets.length] : undefined;
+      const selected = visualAssets[preferredIndex];
       slide.imageRefs = selected ? [selected.id] : [];
       slide.imagePurpose ||= slide.type === "career" ? "해당 경력과 연결되는 현장 사진" : slide.type === "contact" ? "아티스트를 기억하게 만드는 마무리 사진" : "페이지 메시지를 뒷받침하는 활동 사진";
       slide.layout = index % 2 ? "split_right" : "split_left";
-      nextImageIndex = Math.max(nextImageIndex + 1, slide.type === "about" ? 2 : 1);
+      if (selected) nextImageIndex = Math.max(nextImageIndex + 1, slide.type === "about" ? 2 : 1);
     });
     contact.eyebrow = "BOOKING & CONTACT";
-    contact.title = "공연·행사 섭외를 문의해 주세요";
+    contact.title = "행사 목적에 맞는 무대를 제안드립니다";
     contact.body = [body.profile.primaryField, body.profile.purpose, body.profile.region].filter(Boolean).join(" · ");
     contact.bullets = [body.profile.contact || "연락 가능한 전화번호 또는 이메일을 입력해 주세요", body.profile.videoUrl].filter(Boolean).map(String).slice(0, 2);
     contact.imagePurpose ||= "아티스트를 기억하게 만드는 마무리 사진";
@@ -229,8 +217,8 @@ export async function POST(request: Request) {
       slide.imageRefs = slide.imageRefs.filter((id) => validIds.has(id)).slice(0, 1);
       slide.eyebrow = compactText(slide.eyebrow, 28).toUpperCase();
       slide.title = compactText(slide.title, budget.title);
-      slide.body = budget.body ? slide.body.replace(/\s+/g, " ").trim() : "";
-      slide.bullets = budget.bullets ? slide.bullets.map((item) => item.replace(/\s+/g, " ").trim()).filter(Boolean) : [];
+      slide.body = budget.body ? compactText(slide.body, budget.body) : "";
+      slide.bullets = budget.bullets ? slide.bullets.map((item) => compactText(item, budget.bullet)).filter(Boolean).slice(0, budget.bullets) : [];
       const bodyKey = slide.body.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
       if (bodyKey && seenCopy.has(bodyKey)) slide.body = "";
       else if (bodyKey) seenCopy.add(bodyKey);
@@ -240,15 +228,20 @@ export async function POST(request: Request) {
         seenCopy.add(key);
         return true;
       });
-      slide.careerIndexes = [...new Set(slide.careerIndexes)].filter((index) => index < facts.length).slice(0, 6);
+      slide.careerIndexes = [...new Set(slide.careerIndexes)].filter((index) => validFactIndexes.has(index)).slice(0, 6);
     });
-    plan.slides = plan.slides.flatMap(paginateSlide);
     const coveredIndexes = new Set(plan.slides.flatMap((slide) => slide.type === "career" ? slide.careerIndexes : []));
-    const awardIndexes = facts.map((fact, index) => fact.category === "award" ? index : -1).filter((index) => index >= 0);
+    const awardIndexes = facts.map((fact, position) => fact.category === "award" ? factIndexOf(fact, position) : -1).filter((index) => index >= 0);
     const coverage = facts.length ? coveredIndexes.size / facts.length : 1;
     const awardCoverage = awardIndexes.length ? awardIndexes.filter((index) => coveredIndexes.has(index)).length / awardIndexes.length : 1;
     const structureScore = plan.slides[0]?.type === "cover" && plan.slides.at(-1)?.type === "contact" ? 20 : 0;
-    const qualityScore = Math.round(structureScore + coverage * 45 + awardCoverage * 15 + 10 + 10);
+    const usedImageIds = plan.slides.flatMap((slide) => slide.imageRefs);
+    const uniqueImageScore = new Set(usedImageIds).size === usedImageIds.length ? 10 : 0;
+    const textFits = plan.slides.every((slide) => {
+      const budget = copyBudgets[slide.type];
+      return slide.title.length <= budget.title && (!budget.body || slide.body.length <= budget.body) && slide.bullets.length <= budget.bullets && slide.bullets.every((item) => item.length <= budget.bullet);
+    });
+    const qualityScore = Math.round(structureScore + coverage * 45 + awardCoverage * 15 + uniqueImageScore + (textFits ? 10 : 0));
     if (qualityScore < 90) throw new Error(`PPT 품질 점수 미달: ${qualityScore}`);
     return NextResponse.json({ plan, mode: "ai", provider: "Gemini", model: process.env.GEMINI_MODEL || "gemini-3.6-flash", qualityScore, coveredFactCount: coveredIndexes.size, totalFactCount: facts.length });
   } catch (error) {
