@@ -96,7 +96,7 @@ export async function POST(request: Request) {
     const requiredGallerySlides = Math.min(2, galleryVisualAssets.length, Math.max(0, requestedPageCount - 4 - requiredCareerSlides));
     const targetPageCount = requestedPageCount;
     const parts: Part[] = [{
-      text: `당신은 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 사진 모음이나 활동 자료집이 아니라, 제안서를 받는 고객이 이 예술인을 선택해야 하는 이유를 빠르게 이해하고 문의하도록 만드는 심플하고 강한 PPT를 기획하세요.\n\n커뮤니케이션 목표: ${String(body.profile.purpose || "공연·행사 제안")} 담당자가 예술인의 정체성, 고객이 얻게 될 현장 가치, 검증된 활동을 이해하고 마지막 장에서 바로 문의하게 만듭니다. 모든 문장은 아티스트가 아니라 제안받는 고객의 판단을 돕는 언어로 작성합니다.\n\n중요: careers는 직접 입력한 경력과 PDF·외부 링크에서 추출해 승인한 수상·공연·활동·언론 중 고객 설득력이 높은 대표 근거입니다. 전달된 모든 career의 원래 index를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 강점을 구체화하는 참고 근거로 사용하되, 자료를 나열하거나 페이지 수를 늘리지 마세요. 전달된 이미지는 사용자 자료, PDF·PPTX에서 분리한 원본 이미지, 승인된 웹 이미지와 AI 연출 이미지입니다.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- 같은 imageRefs ID를 두 슬라이드에 절대 반복하지 않습니다. 사진이 부족하면 imageRefs를 비우고 imagePurpose에 고객이 준비할 사진을 구체적으로 씁니다.\n- 이미지가 2장 이상이면 about 슬라이드를 반드시 포함합니다. gallery 타입은 사진 갤러리가 아니라 고객에게 한 가지 현장 가치를 증명하는 '대표 장면'이며 정확히 ${requiredGallerySlides}장 사용합니다.\n- 경력·강점·연락처 페이지도 글을 왼쪽, 이미지를 오른쪽에 두는 균형 잡힌 분할 레이아웃을 사용합니다.\n- career 슬라이드는 정확히 ${requiredCareerSlides}장이며 한 장당 최대 6개입니다. 전달된 careers의 원래 index ${JSON.stringify([...validFactIndexes])}를 중복·누락 없이 담습니다.\n- 한 슬라이드는 고객의 질문 하나에 답합니다: 어떤 아티스트인가, 고객 행사에 어떤 가치를 주는가, 무엇으로 검증됐는가, 어떻게 섭외하는가.\n- 강점은 추상적인 자기소개가 아니라 고객 관점의 효과와 선택 근거로 번역합니다. 확인되지 않은 성과는 만들지 않습니다.\n- 제목은 분류명이 아니라 실제 활동 근거가 고객의 선택에 주는 의미를 짧고 구체적인 결론으로 씁니다. 같은 소개·수식어를 반복하지 않습니다.\n- 표지는 활동명과 고객이 기억할 한 줄 가치만 둡니다.\n- 사진은 배경이나 콜라주로 쓰지 않고 독립 프레임에 배치합니다. 사진은 자연스럽게 크롭하고, 포스터·그래픽은 전체를 표시합니다.\n- 경력은 careerIndexes로만 연결하며 사실을 만들거나 과장하지 않습니다.\n- contact는 고객의 다음 행동을 요청하는 제목, 실제 연락처와 대표 영상 링크만 담습니다.\n- 텍스트가 길면 단어 중간을 자르지 말고 띄어쓰기 경계에서 다음 페이지로 넘깁니다. 글자가 슬라이드 밖으로 나가는 것은 절대 금지입니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음, 이미지 정확히 1개\n- career: title 32자, body·bullets 없음, 근거 최대 6개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
+      text: `당신은 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 사진 모음이나 활동 자료집이 아니라, 제안서를 받는 고객이 이 예술인을 선택해야 하는 이유를 빠르게 이해하고 문의하도록 만드는 심플하고 강한 PPT를 기획하세요.\n\n커뮤니케이션 목표: ${String(body.profile.purpose || "공연·행사 제안")} 담당자가 예술인의 정체성, 고객이 얻게 될 현장 가치, 검증된 활동을 이해하고 마지막 장에서 바로 문의하게 만듭니다. 모든 문장은 아티스트가 아니라 제안받는 고객의 판단을 돕는 언어로 작성합니다.\n\n중요: careers는 직접 입력한 경력과 PDF·외부 링크에서 추출해 승인한 수상·공연·활동·언론 중 고객 설득력이 높은 대표 근거입니다. 전달된 모든 career의 원래 index를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 강점을 구체화하는 참고 근거로 사용하되, 자료를 나열하거나 페이지 수를 늘리지 마세요. 전달된 이미지는 사용자 자료, PDF·PPTX에서 분리한 원본 이미지, 승인된 웹 이미지와 AI 연출 이미지입니다.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- 같은 imageRefs ID를 두 슬라이드에 절대 반복하지 않습니다. 사진이 부족하면 imageRefs를 비우고 imagePurpose에 고객이 준비할 사진을 구체적으로 씁니다.\n- 이미지가 2장 이상이면 about 슬라이드를 반드시 포함합니다. gallery 타입은 사진 갤러리가 아니라 고객에게 한 가지 현장 가치를 증명하는 '대표 장면'이며 정확히 ${requiredGallerySlides}장 사용합니다.\n- 경력·강점·연락처 페이지도 글을 왼쪽, 이미지를 오른쪽에 두는 균형 잡힌 분할 레이아웃을 사용합니다.\n- career 슬라이드는 정확히 ${requiredCareerSlides}장이며 한 장당 최대 6개입니다. 전달된 careers의 원래 index ${JSON.stringify([...validFactIndexes])}를 중복·누락 없이 담습니다.\n- career 이외의 모든 슬라이드도 customer value의 증거가 되는 careerIndexes를 최소 1개 지정합니다. 제목과 본문은 그 실제 근거가 고객에게 주는 이익을 해석한 문장이어야 하며, 근거에 없는 성과·효과를 만들지 않습니다.\n- 한 슬라이드는 고객의 질문 하나에 답합니다: 어떤 아티스트인가, 고객 행사에 어떤 가치를 주는가, 무엇으로 검증됐는가, 어떻게 섭외하는가.\n- 강점은 추상적인 자기소개가 아니라 고객 관점의 효과와 선택 근거로 번역합니다. 확인되지 않은 성과는 만들지 않습니다.\n- 제목은 분류명이 아니라 실제 활동 근거가 고객의 선택에 주는 의미를 짧고 구체적인 결론으로 씁니다. 같은 소개·수식어를 반복하지 않습니다.\n- 표지는 활동명과 고객이 기억할 한 줄 가치만 둡니다.\n- 사진은 배경이나 콜라주로 쓰지 않고 독립 프레임에 배치합니다. 사진은 자연스럽게 크롭하고, 포스터·그래픽은 전체를 표시합니다.\n- 경력과 고객 가치의 근거는 careerIndexes로만 연결하며 사실을 만들거나 과장하지 않습니다.\n- contact는 고객의 다음 행동을 요청하는 제목, 실제 연락처와 대표 영상 링크만 담습니다.\n- 텍스트가 길면 단어 중간을 자르지 말고 띄어쓰기 경계에서 다음 페이지로 넘깁니다. 글자가 슬라이드 밖으로 나가는 것은 절대 금지입니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음, 이미지 정확히 1개\n- career: title 32자, body·bullets 없음, 근거 최대 6개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
     }];
 
     assets.forEach((asset) => {
@@ -192,6 +192,20 @@ export async function POST(request: Request) {
         layout: "editorial",
       });
     }
+    if (factIndexes.length) {
+      let evidenceCursor = 0;
+      plan.slides.forEach((slide) => {
+        if (slide.type === "career") return;
+        const requestedEvidenceCount = slide.type === "strengths" ? Math.min(3, factIndexes.length) : 1;
+        const existing = [...new Set(slide.careerIndexes)].filter((index) => validFactIndexes.has(index)).slice(0, requestedEvidenceCount);
+        while (existing.length < requestedEvidenceCount) {
+          const candidate = factIndexes[evidenceCursor % factIndexes.length];
+          evidenceCursor += 1;
+          if (!existing.includes(candidate)) existing.push(candidate);
+        }
+        slide.careerIndexes = existing;
+      });
+    }
 
     const validIds = new Set(assets.map((asset) => asset.id));
     const contact = plan.slides.at(-1)!;
@@ -242,7 +256,8 @@ export async function POST(request: Request) {
       const budget = copyBudgets[slide.type];
       return slide.title.length <= budget.title && (!budget.body || slide.body.length <= budget.body) && slide.bullets.length <= budget.bullets && slide.bullets.every((item) => item.length <= budget.bullet);
     });
-    const qualityScore = Math.round(structureScore + coverage * 45 + awardCoverage * 15 + uniqueImageScore + (textFits ? 10 : 0));
+    const evidenceConnected = !facts.length || plan.slides.every((slide) => slide.careerIndexes.some((index) => validFactIndexes.has(index)));
+    const qualityScore = Math.round(structureScore + coverage * 35 + awardCoverage * 15 + uniqueImageScore + (textFits ? 10 : 0) + (evidenceConnected ? 10 : 0));
     if (qualityScore < 90) throw new Error(`PPT 품질 점수 미달: ${qualityScore}`);
     return NextResponse.json({ plan, mode: "ai", provider: "Gemini", model: process.env.GEMINI_MODEL || "gemini-3.6-flash", qualityScore, coveredFactCount: coveredIndexes.size, totalFactCount: facts.length });
   } catch (error) {

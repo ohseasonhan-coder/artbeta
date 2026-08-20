@@ -137,6 +137,7 @@ export interface ProfileData {
   purpose: string;
   pageCount: number;
   templateKey: string;
+  templateMode: "auto" | "manual";
   introduction: string;
   tagline: string;
   generatedStrengths: string[];
@@ -174,6 +175,7 @@ export const initialProfile: ProfileData = {
   purpose: "공공기관 제안",
   pageCount: 6,
   templateKey: "modern_navy_01",
+  templateMode: "auto",
   introduction: "",
   tagline: "",
   generatedStrengths: [],

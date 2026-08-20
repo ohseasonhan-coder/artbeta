@@ -45,6 +45,18 @@ export function formatCareerFact(fact: DeckFact, compact = false) {
   };
 }
 
+export function formatCustomerValueEvidence(fact: DeckFact) {
+  const formatted = formatCareerFact(fact, true);
+  const value = fact.category === "award"
+    ? "공식 성과가 선택의 신뢰를 높입니다"
+    : fact.category === "performance"
+      ? "검증된 무대 경험이 현장 운영의 안정성을 높입니다"
+      : fact.category === "media"
+        ? "대외 기록이 인지도와 전달력을 뒷받침합니다"
+        : "지속적인 활동이 협업 신뢰를 뒷받침합니다";
+  return `근거 · ${[formatted.date !== "—" ? formatted.date : "", formatted.title].filter(Boolean).join(" ")} — ${value}`;
+}
+
 const categoryLabels: Record<DeckFactCategory, string> = {
   career: "주요 경력",
   performance: "공연·활동",
