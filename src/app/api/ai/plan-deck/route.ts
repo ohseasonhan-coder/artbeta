@@ -46,6 +46,7 @@ interface AssetInput {
   id: string;
   kind: "representative" | "performance" | "generated" | "pdf_visual";
   visualType?: "photo" | "graphic";
+  visualRole?: "portrait" | "stage" | "poster" | "history" | "other" | "exclude";
   pageNumber?: number;
   dataUrl: string;
   sourceUrl?: string;
@@ -101,7 +102,7 @@ export async function POST(request: Request) {
     assets.forEach((asset) => {
       const match = asset.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
       if (!match) return;
-      parts.push({ text: `이미지 후보 ID=${asset.id}, 종류=${asset.kind}, 수집경로=${asset.origin || "unknown"}${typeof asset.qualityScore === "number" ? `, 사전품질점수=${Math.round(asset.qualityScore * 100)}` : ""}${asset.pageNumber ? `, PDF ${asset.pageNumber}페이지` : ""}${asset.sourceTitle ? `, 출처=${asset.sourceTitle}` : ""}` });
+      parts.push({ text: `이미지 후보 ID=${asset.id}, 종류=${asset.kind}, 자동역할=${asset.visualRole || "미분류"}, 수집경로=${asset.origin || "unknown"}${typeof asset.qualityScore === "number" ? `, 사전품질점수=${Math.round(asset.qualityScore * 100)}` : ""}${asset.pageNumber ? `, PDF ${asset.pageNumber}페이지` : ""}${asset.sourceTitle ? `, 출처=${asset.sourceTitle}` : ""}` });
       parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
     });
 

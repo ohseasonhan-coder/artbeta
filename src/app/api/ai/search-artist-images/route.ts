@@ -29,6 +29,9 @@ const matchSchema = z.object({
     qualityScore: z.number().min(0).max(1),
     recommended: z.boolean(),
     identityScore: z.number().min(0).max(1).default(0),
+    visualMatchScore: z.number().min(0).max(1).default(0),
+    referenceSignals: z.array(z.string()).max(8).default([]),
+    visualRole: z.enum(["portrait", "stage", "poster", "history", "other", "exclude"]).default("other"),
     identityConflicts: z.array(z.string()).max(8).default([]),
     watermarkDetected: z.boolean().default(false),
     rightsRisk: z.enum(["low", "unknown", "high"]).default("unknown"),
@@ -203,11 +206,11 @@ export async function POST(request: Request) {
     const downloaded = (await Promise.all([...unique.values()].slice(0, 18).map(downloadImage))).filter((candidate): candidate is Candidate & { dataUrl: string } => Boolean(candidate?.dataUrl)).slice(0, 10);
     if (!downloaded.length) return NextResponse.json({ error: "검색 결과 이미지를 불러오지 못했습니다." }, { status: 502 });
 
-    let scores = new Map<string, { relevanceScore: number; qualityScore: number; recommended: boolean; identityScore: number; identityConflicts: string[]; watermarkDetected: boolean; rightsRisk: "low" | "unknown" | "high"; reason: string }>();
+    let scores = new Map<string, { relevanceScore: number; qualityScore: number; recommended: boolean; identityScore: number; visualMatchScore: number; referenceSignals: string[]; visualRole: "portrait" | "stage" | "poster" | "history" | "other" | "exclude"; identityConflicts: string[]; watermarkDetected: boolean; rightsRisk: "low" | "unknown" | "high"; reason: string }>();
     if (process.env.GEMINI_API_KEY) {
       try {
       const reference = body.referenceImage.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
-      const parts: Part[] = [{ text: `문화예술인 웹 이미지 후보를 검수합니다. 검색 대상은 '${artistName}'이며 분야는 '${body.primaryField || "미지정"}'입니다. 첫 이미지는 사용자가 직접 등록한 참고 사진이고, 이후 이미지는 검색 후보입니다. 얼굴 생체인증이나 동일인 확정을 하지 마세요. 검색 제목·출처의 이름 일치, 개인/단체 구성, 활동 분야와 무대 맥락, 해상도와 구도를 평가하세요. 이미지의 모서리·중앙·반복 패턴에 워터마크, 스톡 사이트 마크, 언론사 로고, 저작권자 서명 또는 큰 텍스트 오버레이가 있으면 watermarkDetected=true와 rightsRisk=high로 지정하고 recommended=false로 두세요. 사용 허가가 불명확하면 rightsRisk=unknown으로 지정하세요. 추천은 관련성이 높고 워터마크가 없으며 출처 페이지에서 사용 권한을 확인할 수 있는 후보에만 허용하세요. 타인 가능성이 있으면 recommended=false로 두고 사용자가 최종 확인해야 한다고 reason에 적으세요.` }];
+      const parts: Part[] = [{ text: `문화예술인 웹 이미지 후보를 엄격하게 검수합니다. 검색 대상은 '${artistName}'이며 분야는 '${body.primaryField || "미지정"}'입니다. 첫 이미지는 사용자가 직접 등록했거나 기존 PDF·PPTX에서 선택한 기준 이미지이고, 이후 이미지는 검색 후보입니다. 생체인증이나 신원 확정을 하지 말고, 보이는 시각적 일관성과 검색 문맥만 평가하세요. 기준 이미지와 후보의 개인/단체 구성, 대략적인 연령대, 헤어스타일·의상·얼굴의 비식별 외형 특징, 공연 장르, 악기·작품·무대 환경이 일치하는 근거를 referenceSignals에 적고 visualMatchScore로 평가하세요. 기준 또는 후보에 비교할 인물이 선명하지 않으면 visualMatchScore는 최대 0.74입니다. 이름만 일치하는 것은 동일 인물 근거가 아닙니다. visualRole은 portrait=인물 대표사진, stage=무대·활동사진, poster=포스터, history=연혁·수상·보도자료, other=보조 이미지, exclude=관련 없음으로 분류하세요. 이미지의 모서리·중앙·반복 패턴에 워터마크, 스톡 사이트 마크, 언론사 로고, 저작권자 서명 또는 큰 텍스트 오버레이가 있으면 watermarkDetected=true와 rightsRisk=high로 지정하고 recommended=false로 두세요. 사용 허가가 불명확하면 rightsRisk=unknown으로 지정하세요. recommended=true는 identityScore와 visualMatchScore가 모두 0.82 이상이고 충돌이 없으며 관련성·품질·권리 조건도 통과한 후보에만 허용하세요. 타인 가능성이 조금이라도 있으면 recommended=false로 두세요.` }];
       parts.push({ text: `동명이인 판별 단서: 지역=${body.region || "미입력"}, 소속=${body.affiliation || "미입력"}, 활동 시작=${body.activeSince || "미입력"}, 대표 경력=${body.identityHint || "미입력"}, 공식 링크=${body.officialUrl || "미입력"}. 후보마다 이름 외 단서가 얼마나 일치하는지 identityScore로 평가하고 충돌은 identityConflicts에 적으세요. 소속·분야·지역·활동 시기 중 명확한 충돌이 있거나 identityScore가 0.7 미만이면 recommended=false로 두세요.` });
       if (reference) parts.push({ text: "사용자 등록 참고 사진" }, { inlineData: { mimeType: reference[1], data: reference[2] } });
       downloaded.forEach((candidate) => {
@@ -237,14 +240,14 @@ export async function POST(request: Request) {
       const searchableTitle = candidate.title.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
       const titleIdentityMatch = identityTerms.some((term) => searchableTitle.includes(term));
       const fallbackRelevance = titleIdentityMatch ? 0.76 : 0.35;
-      const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, identityScore: 0, identityConflicts: [], watermarkDetected: false, rightsRisk: candidate.source === "wikimedia" && candidate.license ? "low" as const : "unknown" as const, reason: candidate.license ? `Wikimedia Commons ${candidate.license} · 동일 인물 여부를 직접 확인해야 합니다.` : "검색 문맥만 확인됨 · 동일 인물과 사용 권한을 직접 확인해야 합니다." };
-      const identityApproved = score.identityScore >= 0.78 && !score.identityConflicts.length && score.relevanceScore >= 0.78;
-      const usageStatus = score.watermarkDetected || score.rightsRisk === "high" ? "blocked" : score.recommended && score.rightsRisk === "low" && identityApproved && score.qualityScore >= 0.65 ? "approved" : "review";
-      return { ...candidate, titleIdentityMatch, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, identityScore: score.identityScore, identityConflicts: score.identityConflicts, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved", reason: score.reason };
+      const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, identityScore: 0, visualMatchScore: 0, referenceSignals: [], visualRole: "other" as const, identityConflicts: [], watermarkDetected: false, rightsRisk: candidate.source === "wikimedia" && candidate.license ? "low" as const : "unknown" as const, reason: candidate.license ? `Wikimedia Commons ${candidate.license} · 동일 인물 여부를 직접 확인해야 합니다.` : "검색 문맥만 확인됨 · 동일 인물과 사용 권한을 직접 확인해야 합니다." };
+      const identityApproved = score.identityScore >= 0.82 && score.visualMatchScore >= 0.82 && score.referenceSignals.length > 0 && !score.identityConflicts.length && score.relevanceScore >= 0.78;
+      const usageStatus = score.watermarkDetected || score.rightsRisk === "high" || score.visualRole === "exclude" ? "blocked" : score.recommended && score.rightsRisk === "low" && identityApproved && score.qualityScore >= 0.65 ? "approved" : "review";
+      return { ...candidate, titleIdentityMatch, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, identityScore: score.identityScore, visualMatchScore: score.visualMatchScore, referenceSignals: score.referenceSignals, visualRole: score.visualRole, identityConflicts: score.identityConflicts, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved", reason: score.reason };
     }).filter((candidate) => scores.has(candidate.id)
-      ? candidate.identityScore >= 0.62 && candidate.relevanceScore >= 0.65 && !candidate.identityConflicts.length
+      ? candidate.identityScore >= 0.62 && candidate.visualMatchScore >= 0.62 && candidate.relevanceScore >= 0.65 && !candidate.identityConflicts.length
       : candidate.titleIdentityMatch)
-      .sort((a, b) => Number(b.recommended) - Number(a.recommended) || b.identityScore - a.identityScore || (b.relevanceScore + b.qualityScore) - (a.relevanceScore + a.qualityScore))
+      .sort((a, b) => Number(b.recommended) - Number(a.recommended) || (b.identityScore + b.visualMatchScore) - (a.identityScore + a.visualMatchScore) || (b.relevanceScore + b.qualityScore) - (a.relevanceScore + a.qualityScore))
       .slice(0, 8);
 
     return NextResponse.json({ query: queries.join(" | "), configuredSources, candidates });

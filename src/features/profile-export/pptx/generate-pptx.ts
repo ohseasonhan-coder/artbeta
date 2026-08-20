@@ -1,4 +1,4 @@
-import { DeckPlan, DeckPlanMeta, DeckSlidePlan, ProfileData } from "@/types/profile";
+import { DeckPlan, DeckPlanMeta, DeckSlidePlan, ProfileData, ProfileVisualRole } from "@/types/profile";
 import { getTemplate } from "@/features/design-templates/registry/templates";
 import { buildDeckFacts, formatCareerFact } from "./deck-facts";
 
@@ -33,6 +33,7 @@ interface VisualAsset {
   id: string;
   kind: "representative" | "performance" | "generated" | "pdf_visual";
   visualType?: "photo" | "graphic";
+  visualRole?: ProfileVisualRole;
   pageNumber?: number;
   dataUrl: string;
   sourceUrl?: string;
@@ -52,17 +53,19 @@ export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   const assets: VisualAsset[] = [];
   if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", origin: "representative", dataUrl: profile.representativeImage });
   profile.performanceImages
-    .forEach((dataUrl, index) => { if (dataUrl) assets.push({ id: `performance-${index + 1}`, kind: "performance", origin: "upload", dataUrl }); });
-  (profile.externalImages ?? []).filter((asset) => asset.source !== "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", origin: "web", qualityScore: (asset.relevanceScore + asset.qualityScore) / 2, dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
+    .forEach((dataUrl, index) => { if (dataUrl) { const category = profile.performanceImageCategories[index]; assets.push({ id: `performance-${index + 1}`, kind: "performance", origin: "upload", visualRole: category === "poster" ? "poster" : category === "history" ? "history" : "stage", visualType: category === "poster" || category === "history" ? "graphic" : "photo", dataUrl }); } });
+  (profile.externalImages ?? []).filter((asset) => asset.source !== "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", origin: "web", visualRole: asset.visualRole, visualType: asset.visualRole === "poster" || asset.visualRole === "history" ? "graphic" : "photo", qualityScore: (asset.relevanceScore + asset.qualityScore + (asset.visualMatchScore ?? asset.relevanceScore)) / 3, dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · 동일 인물 일치 ${Math.round((asset.visualMatchScore ?? 0) * 100)} · ${asset.title}` }));
   (profile.externalImages ?? []).filter((asset) => asset.source === "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "generated", origin: "ai", qualityScore: asset.qualityScore, dataUrl: asset.dataUrl, sourceTitle: `AI 연출 이미지 · ${asset.title}${asset.promptBasis ? ` · 근거: ${asset.promptBasis}` : ""}` }));
   profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => page.extractedVisuals?.filter((visual) => visual.selected).forEach((visual) => assets.push({
     id: `pdf-visual-${page.pageNumber}-${visual.id}`,
     kind: "pdf_visual",
     origin: "pdf",
     visualType: visual.kind,
+    visualRole: visual.role,
+    qualityScore: ((visual.relevanceScore ?? 0.7) + (visual.qualityScore ?? 0.7)) / 2,
     pageNumber: page.pageNumber,
     dataUrl: visual.dataUrl,
-    sourceTitle: `사용자 제공 PDF ${page.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`,
+    sourceTitle: `사용자 제공 PDF ${page.pageNumber}페이지 · ${visual.role === "portrait" ? "인물·대표사진" : visual.role === "stage" ? "무대·활동사진" : visual.role === "poster" ? "포스터·홍보물" : visual.role === "history" ? "연혁·수상자료" : visual.kind === "photo" ? "사진" : "그래픽"}`,
   })));
   return assets;
 }
@@ -74,10 +77,11 @@ function visualAssetKey(asset: VisualAsset) {
 
 export function selectPortfolioAssets(assets: VisualAsset[], limit = 8) {
   const uniqueAssets = assets.filter((asset, index, list) => list.findIndex((candidate) => visualAssetKey(candidate) === visualAssetKey(asset)) === index);
-  const representative = uniqueAssets.find((asset) => asset.kind === "representative");
+  const representative = uniqueAssets.find((asset) => asset.kind === "representative") || uniqueAssets.find((asset) => asset.visualRole === "portrait");
   const originScore = { upload: 92, web: 78, pdf: 96, ai: 55, representative: 100 } as const;
   const candidates = uniqueAssets.filter((asset) => asset !== representative).sort((a, b) => {
-    const score = (asset: VisualAsset) => originScore[asset.origin] + (asset.qualityScore ?? 0.7) * 12 + (asset.visualType === "photo" ? 3 : 0);
+    const roleScore: Partial<Record<ProfileVisualRole, number>> = { portrait: 8, stage: 7, poster: 4, history: 3, other: 0, exclude: -100 };
+    const score = (asset: VisualAsset) => originScore[asset.origin] + (asset.qualityScore ?? 0.7) * 12 + (asset.visualType === "photo" ? 3 : 0) + (roleScore[asset.visualRole || "other"] ?? 0);
     return score(b) - score(a);
   });
   return [...(representative ? [representative] : []), ...candidates].slice(0, limit);

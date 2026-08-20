@@ -55,6 +55,10 @@ export interface PdfExtractedVisual {
   width: number;
   height: number;
   kind: "photo" | "graphic";
+  role?: ProfileVisualRole;
+  relevanceScore?: number;
+  qualityScore?: number;
+  classificationReason?: string;
   selected: boolean;
 }
 
@@ -66,11 +70,18 @@ export interface ExternalImageAsset {
   title: string;
   relevanceScore: number;
   qualityScore: number;
+  visualRole?: ProfileVisualRole;
+  identityScore?: number;
+  visualMatchScore?: number;
+  identityReason?: string;
+  referenceSignals?: string[];
   disclosure?: string;
   promptBasis?: string;
   watermarkDetected?: boolean;
   usageStatus?: "approved" | "review" | "blocked";
 }
+
+export type ProfileVisualRole = "portrait" | "stage" | "poster" | "history" | "other" | "exclude";
 
 export type DeckSlideType = "cover" | "about" | "strengths" | "gallery" | "career" | "contact";
 export type DeckLayout = "full_bleed" | "split_left" | "split_right" | "editorial" | "timeline" | "gallery";

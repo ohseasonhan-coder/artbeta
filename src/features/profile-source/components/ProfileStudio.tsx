@@ -6,7 +6,7 @@ import {
   ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, CircleHelp, Download, FileText,
   ImagePlus, LayoutTemplate, Loader2, Menu, PenLine, Plus, RotateCcw, Search, Sparkles, Trash2, Upload, WandSparkles, X,
 } from "lucide-react";
-import { ExternalImageAsset, ExtractedItem, initialProfile, PdfExtractedVisual, PdfPageAsset, ProfileData, ProfileImageCategory, SourceType } from "@/types/profile";
+import { ExternalImageAsset, ExtractedItem, initialProfile, PdfExtractedVisual, PdfPageAsset, ProfileData, ProfileImageCategory, ProfileVisualRole, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
 import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan, selectPortfolioAssets } from "@/features/profile-export/pptx/generate-pptx";
@@ -121,6 +121,52 @@ async function cropAiVisualRegions(pages: PdfPageAsset[], regions: AiExtractionR
   }));
 }
 
+const visualRoleLabels: Record<ProfileVisualRole, string> = {
+  portrait: "인물·대표사진",
+  stage: "무대·활동사진",
+  poster: "포스터·홍보물",
+  history: "연혁·수상자료",
+  other: "보조 이미지",
+  exclude: "사용 제외",
+};
+
+async function classifyDocumentVisuals(pages: PdfPageAsset[], artistName: string, primaryField: string) {
+  const inputs = pages.flatMap((page) => (page.extractedVisuals ?? []).map((visual) => ({ page, visual }))).slice(0, 16);
+  if (!inputs.length) return pages;
+  try {
+    const images = await Promise.all(inputs.map(async ({ page, visual }) => ({
+      id: visual.id,
+      dataUrl: await makeImageThumbnail(visual.dataUrl, 640),
+      pageNumber: page.pageNumber,
+      pageText: page.text.slice(0, 900),
+      width: visual.width,
+      height: visual.height,
+      kind: visual.kind,
+    })));
+    const response = await fetch("/api/ai/classify-profile-images", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artistName, primaryField, images }) });
+    if (!response.ok) return pages;
+    const result = await response.json() as { classifications?: Array<{ id: string; role: ProfileVisualRole; relevanceScore: number; qualityScore: number; reason: string }> };
+    const classifications = new Map((result.classifications ?? []).map((item) => [item.id, item]));
+    return pages.map((page) => {
+      const extractedVisuals = page.extractedVisuals?.map((visual) => {
+        const classification = classifications.get(visual.id);
+        if (!classification) return visual;
+        return {
+          ...visual,
+          role: classification.role,
+          relevanceScore: classification.relevanceScore,
+          qualityScore: classification.qualityScore,
+          classificationReason: classification.reason,
+          selected: classification.role !== "exclude" && classification.relevanceScore >= 0.55 && classification.qualityScore >= 0.5,
+        };
+      });
+      return { ...page, selected: page.selected || Boolean(extractedVisuals?.some((visual) => visual.selected)), extractedVisuals };
+    });
+  } catch {
+    return pages;
+  }
+}
+
 type FreeResearchSource = "namuwiki" | "otr" | "showgle";
 
 const freeResearchSources: Array<{ key: FreeResearchSource; label: string; domain: string; verificationTier: "platform" | "reference" }> = [
@@ -184,6 +230,25 @@ function mergeExtractedItems(...groups: ExtractedItem[][]) {
 function toggleInList(list: string[], value: string, limit = 99) {
   if (list.includes(value)) return list.filter((item) => item !== value);
   return list.length >= limit ? list : [...list, value];
+}
+
+function approvedWebImage(candidate: WebImageCandidate): ExternalImageAsset {
+  return {
+    id: crypto.randomUUID(),
+    dataUrl: candidate.dataUrl,
+    source: candidate.source,
+    sourceUrl: candidate.sourceUrl,
+    title: candidate.title,
+    relevanceScore: candidate.relevanceScore,
+    qualityScore: candidate.qualityScore,
+    visualRole: candidate.visualRole,
+    identityScore: candidate.identityScore,
+    visualMatchScore: candidate.visualMatchScore,
+    identityReason: candidate.reason,
+    referenceSignals: candidate.referenceSignals,
+    watermarkDetected: candidate.watermarkDetected,
+    usageStatus: "approved",
+  };
 }
 
 export default function ProfileStudio() {
@@ -341,8 +406,9 @@ export default function ProfileStudio() {
       } catch {
         // AI 호출이 실패해도 OCR·규칙 기반 결과로 계속 진행합니다.
       }
-      if (aiProfile?.visualRegions?.length) data.pages = await cropAiVisualRegions(data.pages, aiProfile.visualRegions);
       const name = aiProfile?.artistName || finalItems.find((item) => item.type === "artist_name")?.value;
+      if (aiProfile?.visualRegions?.length) data.pages = await cropAiVisualRegions(data.pages, aiProfile.visualRegions);
+      data.pages = await classifyDocumentVisuals(data.pages, name || profile.artistName, aiProfile?.primaryField || profile.primaryField);
       const aiCareers = aiProfile?.facts?.length
         ? aiProfile.facts.map((fact) => ({
             id: crypto.randomUUID(),
@@ -361,6 +427,9 @@ export default function ProfileStudio() {
       const earliestActivityYear = careers.map((career) => career.year.match(/(?:19|20)\d{2}/)?.[0]).filter((year): year is string => Boolean(year)).sort()[0] || "";
       const representativeCareerHint = careers.find((career) => career.title.trim());
       const separatedVisualCount = data.pages.reduce((count, page) => count + (page.extractedVisuals?.length ?? 0), 0);
+      const autoRepresentative = data.pages
+        .flatMap((page) => (page.extractedVisuals ?? []).filter((visual) => visual.selected))
+        .sort((left, right) => Number(right.role === "portrait") - Number(left.role === "portrait") || Number(right.role === "stage") - Number(left.role === "stage") || (right.qualityScore ?? 0) - (left.qualityScore ?? 0))[0]?.dataUrl;
       setProfile((current) => ({
         ...current,
         artistName: name || current.artistName,
@@ -377,6 +446,7 @@ export default function ProfileStudio() {
         introduction: aiProfile?.introduction || current.introduction,
         tagline: aiProfile?.tagline || current.tagline,
         generatedStrengths: aiProfile?.strengths || current.generatedStrengths,
+        representativeImage: current.representativeImage || autoRepresentative,
         careers: careers.length ? careers : current.careers,
         extractedItems: finalItems,
         pdfPageAssets: data.pages || [],
@@ -672,7 +742,7 @@ export default function ProfileStudio() {
       const desiredVisualCount = Math.min(8, Math.max(5, workingProfile.pageCount));
       const pdfReference = workingProfile.pdfPageAssets
         .flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected) : [])
-        .sort((a, b) => Number(b.kind === "photo") - Number(a.kind === "photo"))[0]?.dataUrl;
+        .sort((a, b) => Number(b.role === "portrait") - Number(a.role === "portrait") || Number(b.role === "stage") - Number(a.role === "stage") || Number(b.kind === "photo") - Number(a.kind === "photo"))[0]?.dataUrl;
       const referenceImageSource = workingProfile.representativeImage || workingProfile.performanceImages.find(Boolean) || pdfReference;
       if (workingProfile.artistName.trim() && referenceImageSource && existingAssets.length < desiredVisualCount) {
         try {
@@ -689,7 +759,7 @@ export default function ProfileStudio() {
             const additions: ExternalImageAsset[] = (result.candidates ?? [])
               .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !existingUrls.has(candidate.sourceUrl))
               .slice(0, Math.min(4, remaining, desiredVisualCount - existingAssets.length))
-              .map((candidate) => ({ id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, usageStatus: "approved" }));
+              .map(approvedWebImage);
             if (additions.length) {
               workingProfile = { ...workingProfile, externalImages: [...workingProfile.externalImages, ...additions] };
               addedWebImageCount = additions.length;
@@ -916,7 +986,7 @@ function InformationStep({ profile, update, setProfile, uploadImage, notice }: {
   const identityLevel = identitySignalCount >= 5 ? "높음" : identitySignalCount >= 3 ? "보통" : "준비 필요";
   return <section className="stage form-stage"><div className="section-heading"><span>02 · 프로필 정보</span><h1>{extracted.length ? "추출된 내용을 확인해 주세요" : "예술인에 대해 알려주세요"}</h1><p>{extracted.length ? "PDF에서 찾은 정보입니다. 수정하거나 제외한 뒤 프로필에 반영할 수 있어요." : "긴 글 대신 꼭 필요한 정보만 입력하면 됩니다."}</p></div>
     {notice && <div className={`notice ${notice.includes("부분 분석") ? "warning" : "success"}`}>{notice}</div>}
-    {profile.pdfPageAssets.length > 0 && <div className="form-card pdf-assets-card"><div className="card-heading"><div><h2>PDF 사진·그림 분리</h2><p>원문 페이지는 근거 확인용으로만 보관하고, 안에 포함된 큰 사진·포스터·그래픽을 별도 자산으로 분리합니다.</p></div><span>{profile.pdfPageAssets.flatMap((asset) => asset.selected ? asset.extractedVisuals?.filter((visual) => visual.selected) ?? [] : []).length}개 이미지 선택</span></div><div className="pdf-page-grid">{profile.pdfPageAssets.map((asset) => <article className={asset.selected ? "selected" : ""} key={asset.pageNumber}><button className="pdf-page-preview" onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber === asset.pageNumber ? { ...page, selected: !page.selected } : page) }))}><img src={asset.previewDataUrl} alt={`PDF ${asset.pageNumber}페이지 원문 미리보기`} /><span>{asset.selected ? <Check size={14} /> : <Plus size={14} />}</span></button><div><strong>{asset.pageNumber}페이지 · 분리 이미지 {asset.extractedVisuals?.length ?? 0}개</strong><small className={asset.textSource}>{asset.textSource === "ocr" ? `OCR ${Math.round(asset.confidence * 100)}%` : asset.textSource === "embedded" ? "텍스트 포함" : "원문 근거"}</small></div>{asset.extractedVisuals?.length ? <div className="pdf-extracted-strip">{asset.extractedVisuals.map((visual) => <button className={visual.selected ? "selected" : ""} key={visual.id} aria-label={`${asset.pageNumber}페이지 ${visual.kind === "photo" ? "사진" : "그래픽"} ${visual.selected ? "제외" : "포함"}`} onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber !== asset.pageNumber ? page : { ...page, selected: true, extractedVisuals: page.extractedVisuals?.map((item) => item.id === visual.id ? { ...item, selected: !item.selected } : item) }) }))}><img src={visual.dataUrl} alt={`${asset.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`} /><span>{visual.kind === "photo" ? "사진" : "그래픽"}</span></button>)}</div> : <p className="pdf-no-visual">분리 가능한 큰 이미지가 없습니다. 텍스트·경력 근거로만 사용됩니다.</p>}</article>)}</div></div>}
+    {profile.pdfPageAssets.length > 0 && <div className="form-card pdf-assets-card"><div className="card-heading"><div><h2>PDF 이미지 자동 분류</h2><p>AI가 분리한 이미지를 인물·무대·포스터·연혁 자료로 나누고 로고·장식·저화질 이미지는 자동 제외합니다.</p></div><span>{profile.pdfPageAssets.flatMap((asset) => asset.selected ? asset.extractedVisuals?.filter((visual) => visual.selected) ?? [] : []).length}개 이미지 선택</span></div><div className="pdf-page-grid">{profile.pdfPageAssets.map((asset) => <article className={asset.selected ? "selected" : ""} key={asset.pageNumber}><button className="pdf-page-preview" onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber === asset.pageNumber ? { ...page, selected: !page.selected } : page) }))}><img src={asset.previewDataUrl} alt={`PDF ${asset.pageNumber}페이지 원문 미리보기`} /><span>{asset.selected ? <Check size={14} /> : <Plus size={14} />}</span></button><div><strong>{asset.pageNumber}페이지 · 분리 이미지 {asset.extractedVisuals?.length ?? 0}개</strong><small className={asset.textSource}>{asset.textSource === "ocr" ? `OCR ${Math.round(asset.confidence * 100)}%` : asset.textSource === "embedded" ? "텍스트 포함" : "원문 근거"}</small></div>{asset.extractedVisuals?.length ? <div className="pdf-extracted-strip">{asset.extractedVisuals.map((visual) => { const label = visual.role ? visualRoleLabels[visual.role] : visual.kind === "photo" ? "사진" : "그래픽"; return <button className={visual.selected ? "selected" : ""} key={visual.id} aria-label={`${asset.pageNumber}페이지 ${label} ${visual.selected ? "제외" : "포함"}`} title={visual.classificationReason} onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber !== asset.pageNumber ? page : { ...page, selected: true, extractedVisuals: page.extractedVisuals?.map((item) => item.id === visual.id ? { ...item, selected: !item.selected } : item) }) }))}><img src={visual.dataUrl} alt={`${asset.pageNumber}페이지에서 분리한 ${label}`} /><span>{label}</span></button>; })}</div> : <p className="pdf-no-visual">분리 가능한 큰 이미지가 없습니다. 텍스트·경력 근거로만 사용됩니다.</p>}</article>)}</div></div>}
     {extracted.length > 0 && <div className="review-panel"><div className="review-title"><h2>AI·PDF 분석 결과</h2><span>{extracted.length}개 항목</span></div>{extracted.map((item) => <div className="review-item" key={item.id}><div className={`confidence ${item.confidence < .7 ? "low" : ""}`}>{Math.round(item.confidence * 100)}%</div><label><span>{item.label}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><textarea value={item.value} disabled={item.status === "excluded"} onChange={(event) => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, value: event.target.value, status: "edited" } : target) }))} /></label><button className={item.status === "excluded" ? "excluded" : ""} onClick={() => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, status: target.status === "excluded" ? "approved" : "excluded" } : target) }))}>{item.status === "excluded" ? "복원" : "제외"}</button></div>)}</div>}
     <div className="form-card"><h2>기본 정보</h2><div className="form-grid"><label><span>활동명 *</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아름 / 아트밴드" /></label><label><span>활동 형태 *</span><div className="segmented"><button className={profile.artistType === "개인" ? "selected" : ""} onClick={() => update("artistType", "개인")}>개인</button><button className={profile.artistType === "단체" ? "selected" : ""} onClick={() => update("artistType", "단체")}>단체</button></div></label><label><span>주 활동 분야 *</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>주요 활동 지역</span><input value={profile.region} onChange={(event) => update("region", event.target.value)} placeholder="예: 서울·경기 / 전국" /></label><label><span>연락 방법</span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><label className="video-link-field"><span>대표 영상 링크</span><input value={profile.videoUrl} onChange={(event) => update("videoUrl", event.target.value)} placeholder="https://youtu.be/..." /><small>YouTube 주소를 입력하면 PPT에 클릭 가능한 영상 바로가기 버튼이 생성됩니다.</small></label></div></div>
     <ExternalResearchCard profile={profile} update={update} />
@@ -1043,7 +1113,7 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
       const found = result.candidates ?? [];
       setCandidates(found);
       const remaining = Math.max(0, Math.min(4, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length));
-      const safeAdditions: ExternalImageAsset[] = found.filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)).slice(0, remaining).map((candidate) => ({ id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, usageStatus: "approved" }));
+      const safeAdditions: ExternalImageAsset[] = found.filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)).slice(0, remaining).map(approvedWebImage);
       if (safeAdditions.length) update("externalImages", [...externalImages, ...safeAdditions]);
       setSearchNotice(`${(result.configuredSources ?? []).join(" · ")}에서 후보 ${found.length}개를 실제 검색했습니다.${safeAdditions.length ? ` 동일 인물·품질·권리 검수를 통과한 핵심 사진 ${safeAdditions.length}장만 자동 선택했습니다.` : " 자동 사용 가능한 후보가 없어 직접 확인이 필요합니다."}${automatic ? "" : " 후보별 출처도 확인할 수 있습니다."}`);
     } catch (error) {
@@ -1063,7 +1133,7 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
       setSearchNotice(`공연·웹 사진은 합쳐서 최대 ${FILE_LIMITS.maxPerformanceImages}장까지 추가할 수 있어요.`);
       return;
     }
-    update("externalImages", [...externalImages, { id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, watermarkDetected: candidate.watermarkDetected, usageStatus: "approved" }]);
+    update("externalImages", [...externalImages, approvedWebImage(candidate)]);
   };
 
   const addRecommendedImages = () => {
@@ -1071,7 +1141,7 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
     const additions: ExternalImageAsset[] = candidates
       .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl))
       .slice(0, Math.min(4, remaining))
-      .map((candidate) => ({ id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, usageStatus: "approved" }));
+      .map(approvedWebImage);
     if (!additions.length) {
       setSearchNotice("자동 추가할 수 있는 워터마크 없는 승인 후보가 없습니다. 출처와 사용 권한을 확인한 뒤 개별 후보를 선택해 주세요.");
       return;
@@ -1090,10 +1160,10 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
 
   const selectedPdfVisuals = profile.pdfPageAssets.flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected).map((visual) => ({ ...visual, pageNumber: page.pageNumber })) : []);
   return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>원문 페이지 전체는 PPT에 넣지 않습니다. 사진은 자연스럽게 크롭하고 포스터·그래픽은 잘리지 않게 독립 프레임으로 배치합니다.</p></div>
-    {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF에서 분리한 디자인 자산</h2><p>원문의 텍스트는 경력·수상 근거로 사용하고, 아래 사진·그림만 실제 PPT 디자인에 배치합니다.</p></div><span className="photo-total-count">{selectedPdfVisuals.length}개 이미지 포함</span></div>{selectedPdfVisuals.length ? <div className="selected-pdf-assets">{selectedPdfVisuals.map((visual) => <article key={`${visual.pageNumber}-${visual.id}`}><img src={visual.dataUrl} alt={`PDF ${visual.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`} /><strong>{visual.pageNumber}페이지 · {visual.kind === "photo" ? "사진" : "그래픽"}</strong><div><button onClick={() => update("representativeImage", visual.dataUrl)}>대표 이미지로 사용</button><span className="pdf-auto-badge">개별 자산 배치</span></div></article>)}</div> : <div className="empty-media">선택한 원문에서 분리할 수 있는 큰 이미지가 없습니다. 원문은 정보 근거로만 사용되며 PPT 화면에는 들어가지 않습니다.</div>}</div>}
+    {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF에서 분류한 디자인 자산</h2><p>인물·무대 사진은 자연스럽게 크롭하고 포스터·연혁 자료는 전체가 보이도록 PPT에 배치합니다.</p></div><span className="photo-total-count">{selectedPdfVisuals.length}개 이미지 포함</span></div>{selectedPdfVisuals.length ? <div className="selected-pdf-assets">{selectedPdfVisuals.map((visual) => { const label = visual.role ? visualRoleLabels[visual.role] : visual.kind === "photo" ? "사진" : "그래픽"; return <article key={`${visual.pageNumber}-${visual.id}`}><img src={visual.dataUrl} alt={`PDF ${visual.pageNumber}페이지에서 분리한 ${label}`} /><strong>{visual.pageNumber}페이지 · {label}</strong><small>{visual.classificationReason}</small><div><button onClick={() => update("representativeImage", visual.dataUrl)}>대표 이미지로 사용</button><span className="pdf-auto-badge">자동 분류 완료</span></div></article>; })}</div> : <div className="empty-media">선택한 원문에서 분리할 수 있는 큰 이미지가 없습니다. 원문은 정보 근거로만 사용되며 PPT 화면에는 들어가지 않습니다.</div>}</div>}
     <div className="form-card ai-image-fill-card"><div className="card-heading"><div><h2>빈 사진 영역 AI로 채우기</h2><p>대표사진과 확인된 경력·장소를 바탕으로 최대 3장의 보조 이미지를 만듭니다. 실제 공연 사진이 아닌 AI 연출 이미지로 명확히 표시됩니다.</p></div><button disabled={generatingImages || !profile.representativeImage || missingImageCount === 0} onClick={() => void generateMissingImages()}>{generatingImages ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} {missingImageCount ? `${missingImageCount}장 생성` : "기본 사진 충족"}</button></div>{generationNotice && <div className="notice warning">{generationNotice}</div>}<small>실제 업로드 사진 → 사용자가 승인한 웹 사진 → AI 연출 이미지 순으로 PPT에 배치됩니다. AI 이미지는 경력의 시각적 이해를 돕는 용도이며 실제 현장 증빙으로 사용하지 않습니다.</small></div>
-    <div className="form-card"><div className="card-heading"><div><h2>대표 활동 사진 자동 검색</h2><p>키 없이 쓰는 Wikimedia와 연결된 네이버·Google·YouTube에서 실제 후보를 찾고, 동일 인물·화질·권리 검수를 통과한 사진만 최대 4장 선택합니다.</p></div><button disabled={searching || !profile.artistName || !profile.representativeImage} onClick={() => void searchArtistImages(false)}>{searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />} 다시 검색</button></div>{!profile.representativeImage && <div className="empty-media">프로필 정보 단계의 사진 1 대표사진을 먼저 등록해 주세요.</div>}</div>
-    {(searchNotice || candidates.length > 0) && <div className="form-card web-image-review"><div className="card-heading"><div><h2>웹 이미지 후보 검토</h2><p>{searchNotice}</p></div><div className="web-review-actions"><span>{candidates.filter((candidate) => candidate.recommended).length}개 추천</span>{candidates.some((candidate) => candidate.recommended && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)) && <button onClick={addRecommendedImages}>안전 추천 자동 추가</button>}</div></div>{candidates.length > 0 && <div className="web-image-grid">{candidates.map((candidate) => { const added = externalImages.some((image) => image.sourceUrl === candidate.sourceUrl); const blocked = candidate.watermarkDetected || candidate.usageStatus === "blocked"; return <article className={candidate.recommended ? "recommended" : blocked ? "blocked" : ""} key={candidate.id}><div className="web-image-frame"><img src={candidate.dataUrl} alt={candidate.title} />{blocked && <span className="watermark-warning">사용 제외</span>}</div><div className="web-image-meta"><span>{candidate.source.toUpperCase()} · 관련도 {Math.round(candidate.relevanceScore * 100)} · 품질 {Math.round(candidate.qualityScore * 100)}</span><strong>{candidate.title}</strong><p>{candidate.reason}</p><div>{candidate.sourceUrl && <a href={candidate.sourceUrl} target="_blank" rel="noreferrer">출처·권한 확인</a>}<button disabled={added || blocked} onClick={() => addExternalImage(candidate)}>{blocked ? "워터마크·권한 위험" : added ? "추가됨" : "PPT 사진으로 추가"}</button></div></div></article>; })}</div>}</div>}
+    <div className="form-card"><div className="card-heading"><div><h2>동일 아티스트 사진 자동 검색</h2><p>기존 대표사진과 웹 후보의 인물·단체 구성, 외형 단서, 공연 맥락을 함께 비교하고 일치 점수 82점 이상만 자동 사용합니다.</p></div><button disabled={searching || !profile.artistName || !profile.representativeImage} onClick={() => void searchArtistImages(false)}>{searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />} 다시 검색</button></div>{!profile.representativeImage && <div className="empty-media">프로필 정보 단계의 사진 1 대표사진을 먼저 등록해 주세요.</div>}</div>
+    {(searchNotice || candidates.length > 0) && <div className="form-card web-image-review"><div className="card-heading"><div><h2>웹 이미지 동일 인물 검토</h2><p>{searchNotice}</p></div><div className="web-review-actions"><span>{candidates.filter((candidate) => candidate.recommended).length}개 추천</span>{candidates.some((candidate) => candidate.recommended && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)) && <button onClick={addRecommendedImages}>검증 사진 자동 추가</button>}</div></div>{candidates.length > 0 && <div className="web-image-grid">{candidates.map((candidate) => { const added = externalImages.some((image) => image.sourceUrl === candidate.sourceUrl); const blocked = candidate.watermarkDetected || candidate.usageStatus === "blocked"; return <article className={candidate.recommended ? "recommended" : blocked ? "blocked" : ""} key={candidate.id}><div className="web-image-frame"><img src={candidate.dataUrl} alt={candidate.title} />{blocked && <span className="watermark-warning">사용 제외</span>}</div><div className="web-image-meta"><span>{candidate.source.toUpperCase()} · 문맥 {Math.round((candidate.identityScore ?? 0) * 100)} · 시각 일치 {Math.round((candidate.visualMatchScore ?? 0) * 100)} · 품질 {Math.round(candidate.qualityScore * 100)}</span><strong>{candidate.visualRole ? `${visualRoleLabels[candidate.visualRole]} · ` : ""}{candidate.title}</strong>{candidate.referenceSignals?.length ? <small>일치 근거 · {candidate.referenceSignals.join(" · ")}</small> : null}<p>{candidate.reason}</p><div>{candidate.sourceUrl && <a href={candidate.sourceUrl} target="_blank" rel="noreferrer">출처·권한 확인</a>}<button disabled={added || blocked} onClick={() => addExternalImage(candidate)}>{blocked ? "불일치·권한 위험" : added ? "추가됨" : "검토 후 추가"}</button></div></div></article>; })}</div>}</div>}
     {externalImages.length > 0 && <div className="form-card web-photo-section"><div className="card-heading"><div><h2>추가한 보조 사진</h2><p>웹 사진은 출처를, AI 이미지는 생성 사실과 근거 경력을 PPT 메모에 남깁니다.</p></div></div><div className="external-image-list">{externalImages.map((image) => <article className={image.source === "ai" ? "generated" : ""} key={image.id}><img src={image.dataUrl} alt={image.title} /><div><strong>{image.title}</strong>{image.source === "ai" ? <><span className="ai-disclosure">AI 연출 이미지</span><small>{image.promptBasis || image.disclosure}</small></> : image.sourceUrl && <a href={image.sourceUrl} target="_blank" rel="noreferrer">{image.source.toUpperCase()} 출처·권한 확인</a>}</div><button aria-label="보조 이미지 삭제" onClick={() => update("externalImages", externalImages.filter((target) => target.id !== image.id))}><X size={14} /></button></article>)}</div></div>}
     <div className="form-card photo-placement-card"><div className="card-heading"><div><h2>PPT 페이지별 사진 배치</h2><p>기존 자료와 승인된 웹 사진을 우선 사용하며 같은 사진은 두 페이지에 반복하지 않습니다.</p></div></div><div className="photo-placement-grid">{photoPlacements.map((placement) => <article key={placement.page}><div><strong>{placement.page}</strong><p>{placement.guide}</p></div><div className={`photo-placement-slots slots-${placement.slots}`}>{Array.from({ length: placement.slots }, (_, index) => placement.assets[index] ? <img src={placement.assets[index].dataUrl} alt={`${placement.page} 배치 사진 ${index + 1}`} key={`${placement.assets[index].id}-${placement.page}`} /> : <span key={index}>사진 필요</span>)}</div></article>)}</div><small>사진이 부족한 페이지에는 반복 이미지 대신 어떤 사진이 필요한지 구체적인 안내를 표시합니다.</small></div>
     <div className="form-card"><div className="card-heading"><div><h2>디자인 템플릿</h2><p>활동 분야와 제출 목적에 어울리는 디자인을 골라보세요.</p></div></div><div className="template-grid">{designTemplates.map((item) => <button key={item.key} className={`template-card ${profile.templateKey === item.key ? "selected" : ""}`} onClick={() => update("templateKey", item.key)}><div className="template-art" style={{ background: item.palette.background, color: item.palette.text }}><span style={{ color: item.palette.accent }}>ARTIST</span><strong>PORT<br />FOLIO</strong><i style={{ background: item.palette.accent }} /></div><div><strong>{item.name}</strong><small>{item.description}</small></div>{profile.templateKey === item.key && <span className="template-check"><Check /></span>}</button>)}</div></div>

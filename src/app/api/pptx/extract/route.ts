@@ -96,11 +96,18 @@ export async function POST(request: Request) {
     const candidates = rawCandidates.filter((value): value is ImageCandidate => Boolean(value)).sort((a, b) => b.width * b.height - a.width * a.height).slice(0, 20).map((candidate, index) => ({ ...candidate, index }));
     const text = slideTexts.join("\n\n").slice(0, 180_000);
 
-    let selected: SelectedImage[] = candidates.slice(0, 8).map((candidate, index) => ({ ...candidate, role: index === 0 ? "representative" : "activity", relevanceScore: 0.7, qualityScore: 0.7, reason: "PPTX에서 추출한 큰 이미지" }));
+    let selected: SelectedImage[] = candidates.slice(0, 8).map((candidate, index) => {
+      const context = candidate.slideNumbers.map((slideNumber) => slideTexts[slideNumber - 1] || "").join(" ");
+      const role = /연혁|수상|보도|기사|award|history/i.test(context) ? "history" as const
+        : /포스터|공연일시|행사일시|poster|concert/i.test(context) ? "poster" as const
+        : index === 0 || candidate.width / Math.max(1, candidate.height) < 0.9 ? "representative" as const
+        : "activity" as const;
+      return { ...candidate, role, relevanceScore: 0.7, qualityScore: 0.7, reason: "크기·비율·슬라이드 문맥으로 자동 분류" };
+    });
     let mode: "ai" | "size_fallback" = "size_fallback";
     if (process.env.GEMINI_API_KEY && candidates.length) {
       try {
-        const parts: Part[] = [{ text: `문화예술인 기존 PPTX에서 새 프로필에 사용할 이미지를 고르세요. 아래 슬라이드 텍스트를 근거로 인물·단체의 실제 활동과 직접 관련된 사진, 작품 이미지, 공연 포스터, 수상·보도 자료만 2~8장 선택합니다. 로고, 아이콘, QR, 서명, 장식 배경, 색상 블록, 스크린샷 UI, 중복·유사 이미지, 작은 이미지, 문서 전체 캡처는 제외하세요. 첫 번째 representative 이미지는 표지로 사용할 수 있을 만큼 주제가 선명해야 합니다. 인물 대표사진이 없으면 억지로 지정하지 말고 가장 강한 활동사진을 representative로 선택하세요.\n\n${text}` }];
+        const parts: Part[] = [{ text: `문화예술인 기존 PPTX에서 새 프로필에 사용할 이미지를 고르고 역할을 분류하세요. 아래 슬라이드 텍스트를 근거로 2~8장만 선택합니다. representative=얼굴·인물·단체가 주제인 대표사진, activity=공연·전시·연주·창작·관객 반응 등 실제 활동 장면, poster=행사 포스터·홍보물·타이포그래피 중심 그래픽, history=연혁·수상·보도·인증 자료입니다. 로고, 아이콘, QR, 서명, 장식 배경, 색상 블록, 스크린샷 UI, 중복·유사 이미지, 작은 이미지, 문서 전체 캡처는 제외하세요. 포스터와 연혁 자료는 잘리지 않게 사용해야 하므로 activity로 잘못 분류하지 마세요. 첫 번째 representative 이미지는 표지로 사용할 만큼 주제가 선명해야 합니다. 인물 대표사진이 없으면 가장 강한 활동사진을 representative로 지정할 수 있습니다.\n\n${text}` }];
         candidates.forEach((candidate) => {
           const match = candidate.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
           parts.push({ text: `후보 index=${candidate.index}, 원본=${candidate.fileName}, 크기=${candidate.width}x${candidate.height}, 사용 슬라이드=${candidate.slideNumbers.join(",") || "알 수 없음"}` });
