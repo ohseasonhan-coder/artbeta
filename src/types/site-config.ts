@@ -46,9 +46,9 @@ export const defaultSiteConfig: SiteConfig = {
     eyebrow: "ARTIST PROFILE STUDIO",
     title: "자료에서 시작하는",
     accentTitle: "전문 아티스트 프로필",
-    description: "보유한 PDF·사진·포스터를 분석해 소개, 경력, 수상, 공연 기록을 정리하고 편집 가능한 제안용 PPT로 완성합니다.",
+    description: "보유한 PDF·PPTX·사진을 분석해 소개, 경력, 수상, 공연 기록과 적합한 이미지를 자동 선별하고 편집 가능한 제안용 PPT로 완성합니다.",
     uploadTitle: "프로필 자료 통합 업로드",
-    uploadDescription: "파일을 선택하면 바로 분석을 시작합니다 · PDF 30MB, 사진 각 10MB",
+    uploadDescription: "파일을 선택하면 바로 분석을 시작합니다 · PDF 30MB, PPTX 40MB, 사진 각 10MB",
     noMaterialLabel: "자료 없이 기본 정보로 시작하기",
     trustItems: ["원본 근거 기반 분석", "편집 가능한 PPTX", "초안 자동 저장"],
     sections: [

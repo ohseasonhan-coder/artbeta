@@ -25,6 +25,15 @@ interface PdfUploadResponse {
   analysisMode?: "server" | "browser";
 }
 
+interface PptxUploadResponse {
+  text: string;
+  slideCount: number;
+  totalImageCount: number;
+  selectedImageCount: number;
+  mode: "ai" | "size_fallback";
+  images: Array<{ dataUrl: string; role: "representative" | "activity" | "poster" | "history"; slideNumbers: number[]; relevanceScore: number; qualityScore: number; reason: string }>;
+}
+
 interface AiExtractionResponse {
   mode: "ai";
   items: ExtractedItem[];
@@ -194,6 +203,68 @@ export default function ProfileStudio() {
 
   const update = <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => setProfile((current) => ({ ...current, [key]: value }));
 
+  const uploadPptx = async (file: File) => {
+    if (file.size > 40 * 1024 * 1024) return setNotice("PPTX는 최대 40MB까지 업로드할 수 있어요.");
+    setBusy(true); setPdfName(file.name); setPdfProgress(18); setNotice("기존 PPTX에서 문구와 사진을 자동 분리하고 있어요.");
+    const timer = window.setInterval(() => setPdfProgress((value) => Math.min(value + 10, 82)), 260);
+    try {
+      const body = new FormData(); body.append("file", file);
+      const response = await fetch("/api/pptx/extract", { method: "POST", body });
+      const data = await response.json() as PptxUploadResponse & { error?: string };
+      if (!response.ok) throw new Error(data.error || "PPTX 분석에 실패했습니다.");
+      setPdfProgress(86); setNotice("AI가 PPTX의 연혁·수상·활동과 사용할 사진을 자동 정리하고 있어요.");
+      let finalItems = inferItemsFromText(data.text);
+      let aiProfile: AiExtractionResponse["profile"] | undefined;
+      let provider = data.mode === "ai" ? "Gemini" : "기본 이미지 분석";
+      try {
+        const pages = data.images.map((image, index) => ({ pageNumber: image.slideNumbers[0] || index + 1, previewDataUrl: image.dataUrl, text: "", textSource: "none" as const }));
+        const aiResponse = await fetch("/api/ai/extract-profile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: data.text, pages }) });
+        const aiResult = await aiResponse.json() as Partial<AiExtractionResponse>;
+        if (aiResponse.ok && aiResult.profile && aiResult.items) {
+          aiProfile = aiResult.profile;
+          finalItems = mergeExtractedItems(aiResult.items, finalItems);
+          provider = aiResult.provider === "gemini" ? "Gemini" : "OpenAI";
+        }
+      } catch { /* 문서 기본 추출 결과로 계속 진행합니다. */ }
+
+      const extractedCareers = aiProfile?.facts?.length ? aiProfile.facts.map((fact) => ({ id: crypto.randomUUID(), year: fact.date, title: fact.title || fact.description, organization: [fact.organization, fact.location, fact.pageNumber ? `${fact.pageNumber}슬라이드` : ""].filter(Boolean).join(" · ") })) : itemsToCareers(finalItems);
+      const uniqueCareers = extractedCareers.filter((career, index, list) => career.title.trim() && list.findIndex((target) => `${target.year}:${target.title}` === `${career.year}:${career.title}`) === index);
+      const representative = data.images.find((image) => image.role === "representative") || data.images[0];
+      const activityImages = data.images.filter((image) => image !== representative).slice(0, FILE_LIMITS.maxPerformanceImages);
+      const categoryMap = { representative: "activity", activity: "activity", poster: "poster", history: "history" } as const;
+      const earliestYear = uniqueCareers.map((career) => career.year.match(/(?:19|20)\d{2}/)?.[0]).filter((year): year is string => Boolean(year)).sort()[0] || "";
+      setProfile((current) => ({
+        ...current,
+        source: "pdf",
+        artistName: aiProfile?.artistName || finalItems.find((item) => item.type === "artist_name")?.value || current.artistName,
+        artistType: aiProfile?.artistType && aiProfile.artistType !== "알 수 없음" ? aiProfile.artistType : current.artistType,
+        primaryField: aiProfile?.primaryField ? normalizeField(aiProfile.primaryField) : current.primaryField || "기타",
+        secondaryField: aiProfile?.secondaryFields.join(", ") || current.secondaryField,
+        region: aiProfile?.region || current.region,
+        members: aiProfile?.members.join(", ") || current.members,
+        contact: aiProfile?.contacts.join(" · ") || current.contact,
+        officialUrl: aiProfile?.socialLinks[0] || current.officialUrl,
+        videoUrl: aiProfile?.socialLinks.find((link) => isYouTubeVideoUrl(link)) || current.videoUrl,
+        introduction: aiProfile?.introduction || current.introduction,
+        tagline: aiProfile?.tagline || current.tagline,
+        generatedStrengths: aiProfile?.strengths || current.generatedStrengths,
+        activeSince: current.activeSince || earliestYear,
+        identityHint: current.identityHint || (uniqueCareers[0] ? [uniqueCareers[0].year, uniqueCareers[0].title, uniqueCareers[0].organization].filter(Boolean).join(" · ") : ""),
+        careers: uniqueCareers.length ? uniqueCareers : current.careers,
+        extractedItems: finalItems,
+        representativeImage: representative?.dataUrl || current.representativeImage,
+        performanceImages: activityImages.map((image) => image.dataUrl),
+        performanceImageCategories: activityImages.map((image) => categoryMap[image.role]),
+      }));
+      setPdfProgress(100);
+      setNotice(`${provider}가 ${data.slideCount}장 PPTX를 분석해 정보 ${finalItems.length}개와 사용할 이미지 ${data.selectedImageCount}장을 자동 선택했습니다.`);
+      window.setTimeout(() => setStep(1), 350);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "PPTX 분석에 실패했습니다.");
+      setPdfProgress(0);
+    } finally { window.clearInterval(timer); setBusy(false); }
+  };
+
   const uploadPdf = async (file?: File) => {
     if (!file) return;
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return setNotice("PDF 파일만 업로드할 수 있어요.");
@@ -345,7 +416,8 @@ export default function ProfileStudio() {
     const files = Array.from(event.target.files || []);
     event.target.value = "";
     if (!files.length) return;
-    update("source", files.some((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "pdf" : "questionnaire");
+    const pptx = files.find((file) => file.name.toLowerCase().endsWith(".pptx") || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    update("source", files.some((file) => file.type === "application/pdf" || /\.(?:pdf|pptx)$/i.test(file.name)) ? "pdf" : "questionnaire");
     const pdf = files.find((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
     const images = files.filter((file) => file.type.startsWith("image/") && file.size <= FILE_LIMITS.image);
     images.forEach((file) => {
@@ -364,7 +436,8 @@ export default function ProfileStudio() {
       };
       reader.readAsDataURL(file);
     });
-    if (pdf) void uploadPdf(pdf);
+    if (pptx) void uploadPptx(pptx);
+    else if (pdf) void uploadPdf(pdf);
     else {
       setNotice(`${images.length}장의 사진을 등록했어요. 대표사진과 활동사진을 자동으로 나눴습니다.`);
       setStep(1);
@@ -401,7 +474,7 @@ export default function ProfileStudio() {
     setBusy(true);
     setNotice("입력한 자료로 소개문을 보완하고 PPT 초안을 만들고 있어요.");
     try {
-      let workingProfile = profile;
+      let workingProfile = profile.primaryField.trim() ? profile : { ...profile, primaryField: "기타" };
       if (!workingProfile.introduction.trim()) {
         try {
           const response = await fetch("/api/ai/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(workingProfile) });
@@ -474,7 +547,7 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
   };
   const sectionContent: Record<string, React.ReactNode> = {
     identity: <div className="quick-identity-row" key="identity"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>,
-    upload: <label className={`unified-dropzone ${busy ? "busy" : ""}`} key="upload"><input type="file" accept="application/pdf,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : config.home.uploadTitle}</strong><small>{config.home.uploadDescription}</small></label>,
+    upload: <label className={`unified-dropzone ${busy ? "busy" : ""}`} key="upload"><input type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : config.home.uploadTitle}</strong><small>{config.home.uploadDescription}<br />PDF·PPTX 안의 사진과 문구도 AI가 자동 선별합니다.</small></label>,
     link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 붙여넣기 <small>선택</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onBlur={saveLink} placeholder="홈페이지·Instagram·YouTube 링크" /></label><button onClick={saveLink}>링크 저장</button></div>,
     aiStatus: <div className="quick-ai-state" key="aiStatus"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>,
   };
@@ -522,12 +595,12 @@ function QuickReviewStep({ profile, update, setProfile, uploadImage, busy, notic
     <div className="section-heading"><span>02 · 내용 확인</span><h1>앱이 정리한 내용만 확인해 주세요</h1><p>맞는 내용은 그대로 두고, 다른 사람의 기록이나 불필요한 항목만 제외하면 됩니다.</p></div>
     <div className="quick-score-card"><div><span>현재 자료 완성도</span><strong>{completeness}<small>점</small></strong></div><div><div className="score-track"><span style={{ width: `${completeness}%` }} /></div><p>{missing.length ? `${missing.slice(0, 2).join(" · ")} 추가 시 PPT가 더 좋아집니다.` : "현재 자료만으로 완성도 높은 PPT를 만들 수 있어요."}</p></div></div>
     <div className="quick-essential-card"><div className="card-heading"><div><h2>꼭 필요한 정보</h2><p>세 가지만 확인하면 바로 PPT를 만들 수 있습니다.</p></div><span className="required-count">필수 3개</span></div><div className="quick-essential-grid"><label><span>활동명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="활동명 또는 팀명" /></label><label><span>활동 분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>섭외 연락처 <small>나중에 가능</small></span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label></div></div>
-    <div className="quick-media-card"><div><div className="quick-cover-photo">{profile.representativeImage ? <img src={profile.representativeImage} alt="대표사진" /> : <ImagePlus />}<label><input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} />{profile.representativeImage ? "대표사진 바꾸기" : "대표사진 추가"}</label></div><div><h2>사진은 위치를 자동으로 정합니다</h2><p>첫 사진은 표지, 나머지는 활동 갤러리에 원본 비율로 배치합니다.</p><label className="quick-add-photos"><input type="file" accept="image/*" multiple onChange={(event) => uploadImage(event, false, "activity")} /><Plus size={14} /> 활동사진 더 추가</label><small>현재 대표사진 {profile.representativeImage ? 1 : 0}장 · 활동사진 {profile.performanceImages.filter(Boolean).length}장</small></div></div></div>
+    <div className="quick-media-card"><div><div className="quick-cover-photo">{profile.representativeImage ? <img src={profile.representativeImage} alt="대표사진" /> : <ImagePlus />}<label><input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} />{profile.representativeImage ? "대표사진 바꾸기" : "대표사진 추가"}</label></div><div><h2>사진은 이미 자동으로 정리했습니다</h2><p>기존 PDF·PPTX에서 AI가 대표사진과 활동사진을 골라 모든 페이지에 자동 배치합니다.</p><label className="quick-add-photos"><input type="file" accept="image/*" multiple onChange={(event) => uploadImage(event, false, "activity")} /><Plus size={14} /> 필요한 경우만 사진 추가</label><small>자동 선택 · 대표사진 {profile.representativeImage ? 1 : 0}장 · 활동사진 {profile.performanceImages.filter(Boolean).length}장</small></div></div></div>
     <div className="quick-review-card"><div className="card-heading"><div><h2>찾아낸 경력·수상·공연</h2><p>초록색은 반영, 회색은 제외됩니다.</p></div><span>{reviewItems.length || realCareers.length}개 발견</span></div>{reviewItems.length ? <div className="fact-confirm-list">{reviewItems.map((item) => <article className={item.status === "excluded" ? "excluded" : "approved"} key={item.id}><div><span>{item.type === "award" ? "수상" : item.type === "performance" ? "공연" : item.type === "media" ? "보도" : "경력"}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><strong>{item.value}</strong></div><div><button className={item.status !== "excluded" ? "selected" : ""} onClick={() => setItemStatus(item.id, "approved")}><Check size={13} /> 맞아요</button><button className={item.status === "excluded" ? "selected exclude" : ""} onClick={() => setItemStatus(item.id, "excluded")}><X size={13} /> 제외</button></div></article>)}</div> : <div className="empty-facts"><FileText /><strong>아직 추출된 경력이 없습니다</strong><p>세부 설정에서 경력 한 줄만 추가해도 PPT를 만들 수 있어요.</p></div>}</div>
     {!profile.introduction.trim() && <button className="quick-copy-button" disabled={busy || !profile.artistName.trim()} onClick={generate}>{busy ? <Loader2 className="spin" /> : <WandSparkles />} 자료로 소개문 자동 작성</button>}
     {notice && <div className="notice warning quick-notice">{notice}</div>}
-    <details className="advanced-settings"><summary><PenLine size={15} /> 세부 정보·사진·디자인 직접 수정 <ChevronRight size={15} /></summary><div><InformationStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} notice={notice} /><ContentStep profile={profile} update={update} busy={busy} generate={generate} notice={notice} /><DesignStep profile={profile} update={update} /></div></details>
-    <div className="quick-build-bar"><div><strong>{profile.artistName || "아티스트"} 프로필 초안</strong><span>부족한 문구는 자동으로 보완한 뒤 미리보기를 만듭니다.</span></div><button disabled={busy || !profile.artistName.trim() || !profile.primaryField.trim()} onClick={() => void onBuild()}>{busy ? <><Loader2 className="spin" /> PPT 구성 중</> : <>PPT 미리보기 만들기 <ArrowRight size={16} /></>}</button></div>
+    <details className="advanced-settings"><summary><PenLine size={15} /> 필요한 경우에만 세부 내용 수정 <ChevronRight size={15} /></summary><div><InformationStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} notice={notice} /><ContentStep profile={profile} update={update} busy={busy} generate={generate} notice={notice} /><DesignStep profile={profile} update={update} /></div></details>
+    <div className="quick-build-bar"><div><strong>{profile.artistName || "아티스트"} 프로필 초안</strong><span>사진 선택·문구 압축·페이지 배치는 앱이 자동으로 완성합니다.</span></div><button disabled={busy || !profile.artistName.trim()} onClick={() => void onBuild()}>{busy ? <><Loader2 className="spin" /> PPT 구성 중</> : <>이 정보로 PPT 자동 완성 <ArrowRight size={16} /></>}</button></div>
   </section>;
 }
 
