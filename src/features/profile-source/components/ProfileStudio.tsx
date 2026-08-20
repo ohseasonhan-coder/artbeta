@@ -159,7 +159,15 @@ function itemsToCareers(items: ExtractedItem[]) {
     .filter((item) => ["career", "performance", "award", "media"].includes(item.type))
     .map((item) => {
       const year = item.value.match(/(?:19|20)\d{2}(?:[.년\-/]\d{1,2})?(?:[.월\-/]\d{1,2})?/)?.[0] ?? "";
-      return { id: crypto.randomUUID(), year, title: item.value.replace(year, "").replace(/^\s*[·.\-/]\s*/, "").trim(), organization: item.pageNumber ? `${item.label} · ${item.pageNumber}p` : item.label };
+      return {
+        id: crypto.randomUUID(),
+        year,
+        title: item.value.replace(year, "").replace(/^\s*[·.\-/]\s*/, "").trim(),
+        organization: item.pageNumber ? `${item.label} · ${item.pageNumber}p` : item.label,
+        sourceName: item.sourceName,
+        sourceUrl: item.sourceUrl,
+        verificationTier: item.verificationTier,
+      };
     });
 }
 
@@ -453,100 +461,134 @@ export default function ProfileStudio() {
     }
   };
 
-  const analyzeQuickLink = async (rawLink: string) => {
-    const candidate = rawLink.trim();
-    if (!candidate) return;
-    const link = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
-    if (isYouTubeVideoUrl(link)) {
-      setProfile((current) => ({ ...current, source: current.source || "questionnaire", videoUrl: normalizeVideoUrl(link) }));
-      setNotice("YouTube 대표 영상 링크를 저장했어요. PPT에 재생 버튼과 바로가기로 반영합니다.");
+  const analyzeQuickLinks = async (rawLinks: string) => {
+    const candidates = rawLinks.split(/[\s,]+/).map((value) => value.trim()).filter(Boolean);
+    const parsedLinks = [...new Set(candidates.map((candidate) => {
+      try {
+        const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
+        return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+      } catch {
+        return "";
+      }
+    }).filter(Boolean))].slice(0, 8);
+    if (!parsedLinks.length) {
+      setNotice("한 줄에 하나씩 올바른 외부 링크를 입력해 주세요.");
       return;
     }
 
-    let parsed: URL;
-    try {
-      parsed = new URL(link);
-    } catch {
-      setNotice("https://로 시작하는 올바른 외부 링크를 입력해 주세요.");
-      return;
-    }
-
-    update("officialUrl", parsed.toString());
+    const videoLinks = parsedLinks.filter(isYouTubeVideoUrl);
+    const profileLinks = parsedLinks.filter((url) => !isYouTubeVideoUrl(url));
     setBusy(true);
-    setNotice("외부 페이지에서 소개·경력·공연·수상 정보를 읽고 있어요.");
+    setNotice(`${parsedLinks.length}개 링크를 확인하고 있어요. 외부 원문은 함께 읽고 AI 분석은 한 번만 실행합니다.`);
     try {
-      const pageResponse = await fetch("/api/profile-link/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: parsed.toString() }),
+      const results = await Promise.all(profileLinks.map(async (url) => {
+        try {
+          const response = await fetch("/api/profile-link/extract", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+          });
+          const page = await response.json() as ProfileLinkResponse;
+          if (!response.ok) throw new Error(page.error || "원문을 읽지 못했습니다.");
+          return { requestedUrl: url, page };
+        } catch (error) {
+          return { requestedUrl: url, error: error instanceof Error ? error.message : "원문을 읽지 못했습니다." };
+        }
+      }));
+      const pages = results.flatMap((result) => result.page ? [result.page] : []);
+      const nonAmbiguousPages = pages.filter((page) => !(page.verificationTier === "reference" && /분류\s*동음이의어/.test(page.text.slice(0, 3_000))));
+      const identitySignals = [profile.artistName, profile.affiliation]
+        .map((value) => value.replace(/\s+/g, "").toLowerCase())
+        .filter((value) => value.length >= 2);
+      const usablePages = nonAmbiguousPages.filter((page) => {
+        if (!identitySignals.length) return true;
+        const sourceText = `${page.title}\n${page.text}`.replace(/\s+/g, "").toLowerCase();
+        return identitySignals.some((signal) => sourceText.includes(signal));
       });
-      const page = await pageResponse.json() as ProfileLinkResponse;
-      if (!pageResponse.ok) throw new Error(page.error || "외부 페이지를 읽지 못했습니다.");
+      const ambiguousCount = pages.length - nonAmbiguousPages.length;
+      const unrelatedCount = nonAmbiguousPages.length - usablePages.length;
 
-      const ambiguousPage = page.verificationTier === "reference" && /(?:분류\s*)?동음이의어|동명이인/.test(page.text.slice(0, 8_000));
-      const sourceLinkItem: ExtractedItem = {
-        id: `social_link-${crypto.randomUUID()}`,
-        type: "social_link",
-        label: `${page.sourceName} 원문`,
-        value: page.url,
-        confidence: 1,
-        status: "approved",
-        sourceName: page.sourceName,
-        sourceUrl: page.url,
-        verificationTier: page.verificationTier,
+      const pageForValue = (value: string) => {
+        const normalized = value.toLowerCase();
+        const direct = usablePages.find((page) => normalized.includes(page.url.toLowerCase()));
+        if (direct) return direct;
+        const tokens = normalized.match(/[가-힣a-z0-9]{3,}/g)?.filter((token) => !/^(?:19|20)\d{2}$/.test(token)).slice(0, 10) ?? [];
+        return usablePages
+          .map((page) => ({ page, score: tokens.filter((token) => page.text.toLowerCase().includes(token)).length }))
+          .sort((a, b) => b.score - a.score)[0]?.page ?? usablePages[0];
       };
-      let finalItems: ExtractedItem[] = ambiguousPage ? [sourceLinkItem] : [
-        sourceLinkItem,
-        ...inferItemsFromText(page.text)
-          .filter((item) => ["career", "performance", "award", "media", "contact"].includes(item.type))
-          .map((item) => ({
-            ...item,
-            confidence: Math.min(item.confidence, 0.65),
-            status: "needs_review" as const,
-            sourceName: page.sourceName,
-            sourceUrl: page.url,
-            verificationTier: page.verificationTier,
-          })),
-      ];
+      const sourceLinkItems: ExtractedItem[] = parsedLinks.map((url) => {
+        const page = pages.find((item) => item.url === url) ?? pages.find((item) => item.url.replace(/\/$/, "") === url.replace(/\/$/, ""));
+        const hostname = new URL(url).hostname.replace(/^www\./, "");
+        const sourceName = isYouTubeVideoUrl(url) ? "YouTube" : page?.sourceName || hostname;
+        return {
+          id: `social_link-${crypto.randomUUID()}`,
+          type: "social_link",
+          label: `${sourceName} 원문`,
+          value: url,
+          confidence: 1,
+          status: "approved",
+          sourceName,
+          sourceUrl: url,
+          verificationTier: page?.verificationTier || (isYouTubeVideoUrl(url) ? "platform" : "primary"),
+        };
+      });
+      const localItems: ExtractedItem[] = usablePages.flatMap((page) => inferItemsFromText(page.text)
+        .filter((item) => ["career", "performance", "award", "media", "contact"].includes(item.type))
+        .map((item) => ({
+          ...item,
+          confidence: Math.min(item.confidence, 0.65),
+          status: "needs_review" as const,
+          sourceName: page.sourceName,
+          sourceUrl: page.url,
+          verificationTier: page.verificationTier,
+        })));
+      let finalItems = mergeExtractedItems(sourceLinkItems, localItems);
       let aiProfile: AiExtractionResponse["profile"] | undefined;
-      let provider = ambiguousPage ? "링크 저장" : "기본 분석";
-      if (!ambiguousPage) try {
+      let provider = "기본 분석";
+
+      if (usablePages.length) try {
+        const perPageLimit = Math.max(12_000, Math.floor(150_000 / usablePages.length));
+        const combinedText = [
+          `[분석 대상 활동명: ${profile.artistName || "미입력"}]`,
+          `[활동 분야: ${profile.primaryField || "미입력"}]`,
+          `[소속·지역·식별 단서: ${[profile.affiliation, profile.region, profile.identityHint].filter(Boolean).join(" · ") || "미입력"}]`,
+          "아래 여러 원문을 교차 확인하세요. 동명이인, 광고, 사이트 메뉴는 제외하고 대상과 일치하는 사실만 추출하세요.",
+          ...usablePages.map((page, index) => `\n[원문 ${index + 1} · ${page.sourceName}]\n[URL: ${page.url}]\n${page.text.slice(0, perPageLimit)}`),
+        ].join("\n");
         const aiResponse = await fetch("/api/ai/extract-profile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: [
-              `[분석 대상 활동명: ${profile.artistName || "미입력"}]`,
-              `[활동 분야: ${profile.primaryField || "미입력"}]`,
-              `[소속·지역·식별 단서: ${[profile.affiliation, profile.region, profile.identityHint].filter(Boolean).join(" · ") || "미입력"}]`,
-              "동명이인 목록, 광고, 사이트 메뉴는 제외하고 위 대상과 일치하는 내용만 추출하세요.",
-              `[출처: ${page.sourceName}]`,
-              `[원문: ${page.url}]`,
-              page.text,
-            ].join("\n"),
-          }),
+          body: JSON.stringify({ text: combinedText }),
         });
         const aiResult = await aiResponse.json() as Partial<AiExtractionResponse>;
         if (aiResponse.ok && aiResult.items && aiResult.profile) {
           aiProfile = aiResult.profile;
-          const sourcedAiItems = aiResult.items.map((item) => ({ ...item, sourceName: page.sourceName, sourceUrl: page.url, verificationTier: page.verificationTier }));
-          finalItems = mergeExtractedItems(sourcedAiItems, finalItems);
+          const sourcedAiItems = aiResult.items.map((item) => {
+            const source = pageForValue(item.value);
+            return { ...item, sourceName: source?.sourceName, sourceUrl: source?.url, verificationTier: source?.verificationTier };
+          });
+          finalItems = mergeExtractedItems(sourceLinkItems, sourcedAiItems, localItems);
           provider = aiResult.provider === "gemini" ? "Gemini" : "OpenAI";
         }
       } catch {
-        // AI 무료 한도가 소진되어도 원문 규칙 기반 결과는 반영합니다.
+        // AI 무료 한도가 소진되어도 모든 링크와 규칙 기반 결과는 보존합니다.
       }
 
       const sourcedCareers = (aiProfile?.facts?.length
-        ? aiProfile.facts.map((fact) => ({
-            id: crypto.randomUUID(),
-            year: fact.date,
-            title: fact.title || fact.description,
-            organization: [fact.organization, fact.location].filter(Boolean).join(" · "),
-          }))
-        : itemsToCareers(finalItems))
-        .filter((career) => career.title.trim())
-        .map((career) => ({ ...career, sourceName: page.sourceName, sourceUrl: page.url, verificationTier: page.verificationTier }));
+        ? aiProfile.facts.map((fact) => {
+            const source = pageForValue([fact.title, fact.organization, fact.location, fact.description].join(" "));
+            return {
+              id: crypto.randomUUID(),
+              year: fact.date,
+              title: fact.title || fact.description,
+              organization: [fact.organization, fact.location].filter(Boolean).join(" · "),
+              sourceName: source?.sourceName,
+              sourceUrl: source?.url,
+              verificationTier: source?.verificationTier,
+            };
+          })
+        : itemsToCareers(finalItems)).filter((career) => career.title.trim());
 
       setProfile((current) => {
         const careerKeys = new Set(current.careers.filter((career) => career.title.trim()).map((career) => `${career.year}:${career.title.replace(/\s+/g, " ").toLowerCase()}`));
@@ -568,22 +610,27 @@ export default function ProfileStudio() {
           region: current.region || aiProfile?.region || "",
           members: current.members || aiProfile?.members.join(", ") || "",
           contact: current.contact || aiProfile?.contacts.join(" · ") || "",
-          officialUrl: page.url,
-          videoUrl: aiProfile?.socialLinks.find((url) => isYouTubeVideoUrl(url)) || current.videoUrl,
+          officialUrl: current.officialUrl || profileLinks[0] || "",
+          videoUrl: current.videoUrl || (videoLinks[0] ? normalizeVideoUrl(videoLinks[0]) : "") || aiProfile?.socialLinks.find(isYouTubeVideoUrl) || "",
           introduction: current.introduction || aiProfile?.introduction || "",
           tagline: current.tagline || aiProfile?.tagline || "",
           generatedStrengths: current.generatedStrengths.length ? current.generatedStrengths : aiProfile?.strengths || [],
-          identityHint: current.identityHint || (firstCareer ? [firstCareer.year, firstCareer.title, firstCareer.organization].filter(Boolean).join(" · ") : page.title),
+          identityHint: current.identityHint || (firstCareer ? [firstCareer.year, firstCareer.title, firstCareer.organization].filter(Boolean).join(" · ") : usablePages[0]?.title || ""),
           careers: [...existingCareers, ...newCareers].length ? [...existingCareers, ...newCareers] : current.careers,
           extractedItems: mergeExtractedItems(current.extractedItems, finalItems),
         };
       });
-      setNotice(ambiguousPage
-        ? `${page.sourceName} 동음이의어 페이지로 확인되어 다른 사람의 기록은 반영하지 않고 원문 링크만 저장했어요. 본인 전용 문서 링크를 붙여넣으면 자동 분석됩니다.`
-        : `${provider}가 ${page.sourceName} 원문을 분석해 경력·수상·공연 ${sourcedCareers.length}건과 프로필 정보 ${finalItems.length}건을 반영했어요.`);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "원문을 자동으로 읽지 못했습니다.";
-      setNotice(`링크는 저장했어요. ${reason} 세부 내용은 다음 화면에서 직접 보완할 수 있습니다.`);
+
+      const failedCount = results.filter((result) => result.error).length;
+      const details = [
+        `${parsedLinks.length}개 링크 저장`,
+        `${usablePages.length}개 원문 분석`,
+        videoLinks.length ? `YouTube ${videoLinks.length}개` : "",
+        ambiguousCount ? `동음이의어 ${ambiguousCount}개 제외` : "",
+        unrelatedCount ? `활동명 불일치 ${unrelatedCount}개 제외` : "",
+        failedCount ? `자동 읽기 제한 ${failedCount}개` : "",
+      ].filter(Boolean).join(" · ");
+      setNotice(`${provider} 완료: ${details}. 경력·수상·공연 ${sourcedCareers.length}건을 반영했어요.`);
     } finally {
       setBusy(false);
     }
@@ -664,14 +711,14 @@ export default function ProfileStudio() {
         </div>
       )}
 
-      {step === 0 && <QuickStartStep profile={profile} update={update} progress={pdfProgress} fileName={pdfName} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadQuickMaterials} onAnalyzeLink={analyzeQuickLink} onSkip={() => { update("source", "questionnaire"); setStep(1); }} />}
+      {step === 0 && <QuickStartStep profile={profile} update={update} progress={pdfProgress} fileName={pdfName} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadQuickMaterials} onAnalyzeLinks={analyzeQuickLinks} onSkip={() => { update("source", "questionnaire"); setStep(1); }} />}
       {step === 1 && <QuickReviewStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} busy={busy} notice={notice} generate={generateCopy} onBuild={prepareDeck} />}
       {step === 2 && <PreviewStep profile={profile} template={template} busy={busy} notice={notice} onEdit={() => setStep(1)} onRetry={prepareDeck} onDownload={exportDeck} />}
     </main>
   );
 }
 
-function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiStatus, onUpload, onAnalyzeLink, onSkip }: {
+function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiStatus, onUpload, onAnalyzeLinks, onSkip }: {
   profile: ProfileData;
   update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void;
   progress: number;
@@ -680,7 +727,7 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
   notice: string;
   aiStatus: AiStatus;
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
-  onAnalyzeLink: (link: string) => Promise<void>;
+  onAnalyzeLinks: (links: string) => Promise<void>;
   onSkip: () => void;
 }) {
   const { config } = useSiteSettings();
@@ -688,12 +735,12 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
   const saveLink = () => {
     const link = linkValue.trim();
     if (!link) return;
-    void onAnalyzeLink(link);
+    void onAnalyzeLinks(link);
   };
   const sectionContent: Record<string, React.ReactNode> = {
     identity: <div className="quick-identity-row" key="identity"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>,
     upload: <label className={`unified-dropzone ${busy ? "busy" : ""}`} key="upload"><input type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : config.home.uploadTitle}</strong><small>{config.home.uploadDescription}<br />PDF·PPTX 안의 사진과 문구도 AI가 자동 선별합니다.</small></label>,
-    link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 붙여넣기 <small>외부 프로필도 자동 분석</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveLink(); }} placeholder="홈페이지·Instagram·YouTube·나무위키·OTR·쇼글 링크" /></label><button disabled={busy || !linkValue.trim()} onClick={saveLink}>{busy ? "분석 중" : "링크 분석"}</button></div>,
+    link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 여러 개 붙여넣기 <small>최대 8개 · 한 줄에 하나씩</small></span><textarea value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) saveLink(); }} placeholder={"나무위키·OTR·쇼글·홈페이지·YouTube 링크\nhttps://...\nhttps://..."} /></label><button disabled={busy || !linkValue.trim()} onClick={saveLink}>{busy ? "분석 중" : "모든 링크 분석"}</button></div>,
     aiStatus: <div className="quick-ai-state" key="aiStatus"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>,
   };
   return <section className="hero quick-start-page">
