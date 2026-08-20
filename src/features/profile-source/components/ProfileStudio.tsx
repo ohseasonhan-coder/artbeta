@@ -6,7 +6,7 @@ import {
   ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, CircleHelp, Download, FileText,
   ImagePlus, LayoutTemplate, Loader2, Menu, PenLine, Plus, RotateCcw, Search, Sparkles, Trash2, Upload, WandSparkles, X,
 } from "lucide-react";
-import { ExternalImageAsset, ExtractedItem, initialProfile, PdfPageAsset, ProfileData, ProfileImageCategory, SourceType } from "@/types/profile";
+import { ExternalImageAsset, ExtractedItem, initialProfile, PdfExtractedVisual, PdfPageAsset, ProfileData, ProfileImageCategory, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
 import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan } from "@/features/profile-export/pptx/generate-pptx";
@@ -50,6 +50,7 @@ interface AiExtractionResponse {
       pageNumber: number;
       confidence: number;
     }>;
+    visualRegions: Array<{ pageNumber: number; x: number; y: number; width: number; height: number; kind: "photo" | "graphic"; description: string; confidence: number }>;
   };
   provider: "gemini" | "openai";
   model: string;
@@ -78,6 +79,28 @@ interface GeneratedProfileImage {
   title: string;
   promptBasis: string;
   disclosure: string;
+}
+
+async function cropAiVisualRegions(pages: PdfPageAsset[], regions: AiExtractionResponse["profile"]["visualRegions"] = []) {
+  const grouped = new Map<number, typeof regions>();
+  regions.filter((region) => region.confidence >= 0.65 && region.width * region.height <= 0.8 && region.width >= 0.12 && region.height >= 0.12).forEach((region) => grouped.set(region.pageNumber, [...grouped.get(region.pageNumber) ?? [], region]));
+  return Promise.all(pages.map(async (page) => {
+    if (page.extractedVisuals?.length || !grouped.has(page.pageNumber)) return page;
+    const image = await new Promise<HTMLImageElement | null>((resolve) => { const target = new Image(); target.onload = () => resolve(target); target.onerror = () => resolve(null); target.src = page.previewDataUrl; });
+    if (!image) return page;
+    const extractedVisuals: PdfExtractedVisual[] = [];
+    for (const region of grouped.get(page.pageNumber)!.slice(0, 4)) {
+      const sx = Math.max(0, Math.round(region.x * image.naturalWidth));
+      const sy = Math.max(0, Math.round(region.y * image.naturalHeight));
+      const width = Math.min(image.naturalWidth - sx, Math.round(region.width * image.naturalWidth));
+      const height = Math.min(image.naturalHeight - sy, Math.round(region.height * image.naturalHeight));
+      if (width < 160 || height < 120) continue;
+      const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
+      canvas.getContext("2d")?.drawImage(image, sx, sy, width, height, 0, 0, width, height);
+      extractedVisuals.push({ id: `p${page.pageNumber}-ai-visual-${extractedVisuals.length + 1}`, dataUrl: canvas.toDataURL("image/jpeg", 0.9), width, height, kind: region.kind, selected: true });
+    }
+    return { ...page, extractedVisuals };
+  }));
 }
 
 type FreeResearchSource = "namuwiki" | "otr" | "showgle";
@@ -230,6 +253,7 @@ export default function ProfileStudio() {
       } catch {
         // AI 호출이 실패해도 OCR·규칙 기반 결과로 계속 진행합니다.
       }
+      if (aiProfile?.visualRegions?.length) data.pages = await cropAiVisualRegions(data.pages, aiProfile.visualRegions);
       const name = aiProfile?.artistName || finalItems.find((item) => item.type === "artist_name")?.value;
       const aiCareers = aiProfile?.facts?.length
         ? aiProfile.facts.map((fact) => ({
@@ -248,6 +272,7 @@ export default function ProfileStudio() {
       });
       const earliestActivityYear = careers.map((career) => career.year.match(/(?:19|20)\d{2}/)?.[0]).filter((year): year is string => Boolean(year)).sort()[0] || "";
       const representativeCareerHint = careers.find((career) => career.title.trim());
+      const separatedVisualCount = data.pages.reduce((count, page) => count + (page.extractedVisuals?.length ?? 0), 0);
       setProfile((current) => ({
         ...current,
         artistName: name || current.artistName,
@@ -269,7 +294,7 @@ export default function ProfileStudio() {
         pdfPageAssets: data.pages || [],
       }));
       setNotice(aiMode
-        ? `${aiProvider} · ${aiModel} 원본 PDF 정밀 분석 완료: 연혁을 포함해 ${finalItems.length}개 항목을 찾았어요. 원문과 대조해 승인해 주세요.`
+        ? `${aiProvider} · ${aiModel} 원본 PDF 정밀 분석 완료: ${finalItems.length}개 정보와 PPT용 사진·그림 ${separatedVisualCount}개를 분리했어요. 원문과 대조해 승인해 주세요.`
         : data.warnings?.length
         ? `PDF를 부분 분석했습니다. ${data.warnings[0]}`
         : data.analysisMode === "browser"
@@ -559,7 +584,7 @@ function InformationStep({ profile, update, setProfile, uploadImage, notice }: {
   const identityLevel = identitySignalCount >= 5 ? "높음" : identitySignalCount >= 3 ? "보통" : "준비 필요";
   return <section className="stage form-stage"><div className="section-heading"><span>02 · 프로필 정보</span><h1>{extracted.length ? "추출된 내용을 확인해 주세요" : "예술인에 대해 알려주세요"}</h1><p>{extracted.length ? "PDF에서 찾은 정보입니다. 수정하거나 제외한 뒤 프로필에 반영할 수 있어요." : "긴 글 대신 꼭 필요한 정보만 입력하면 됩니다."}</p></div>
     {notice && <div className={`notice ${notice.includes("부분 분석") ? "warning" : "success"}`}>{notice}</div>}
-    {profile.pdfPageAssets.length > 0 && <div className="form-card pdf-assets-card"><div className="card-heading"><div><h2>PDF 이미지 자산</h2><p>스캔본을 포함한 모든 페이지를 이미지로 보존했습니다. 프로필에 재사용할 페이지를 선택하세요.</p></div><span>{profile.pdfPageAssets.filter((asset) => asset.selected).length}개 선택</span></div><div className="pdf-page-grid">{profile.pdfPageAssets.map((asset) => <article className={asset.selected ? "selected" : ""} key={asset.pageNumber}><button className="pdf-page-preview" onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber === asset.pageNumber ? { ...page, selected: !page.selected } : page) }))}><img src={asset.previewDataUrl} alt={`PDF ${asset.pageNumber}페이지`} /><span>{asset.selected ? <Check size={14} /> : <Plus size={14} />}</span></button><div><strong>{asset.pageNumber}페이지</strong><small className={asset.textSource}>{asset.textSource === "ocr" ? `OCR ${Math.round(asset.confidence * 100)}%` : asset.textSource === "embedded" ? "텍스트 포함" : "이미지 자산"}</small></div></article>)}</div></div>}
+    {profile.pdfPageAssets.length > 0 && <div className="form-card pdf-assets-card"><div className="card-heading"><div><h2>PDF 사진·그림 분리</h2><p>원문 페이지는 근거 확인용으로만 보관하고, 안에 포함된 큰 사진·포스터·그래픽을 별도 자산으로 분리합니다.</p></div><span>{profile.pdfPageAssets.flatMap((asset) => asset.selected ? asset.extractedVisuals?.filter((visual) => visual.selected) ?? [] : []).length}개 이미지 선택</span></div><div className="pdf-page-grid">{profile.pdfPageAssets.map((asset) => <article className={asset.selected ? "selected" : ""} key={asset.pageNumber}><button className="pdf-page-preview" onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber === asset.pageNumber ? { ...page, selected: !page.selected } : page) }))}><img src={asset.previewDataUrl} alt={`PDF ${asset.pageNumber}페이지 원문 미리보기`} /><span>{asset.selected ? <Check size={14} /> : <Plus size={14} />}</span></button><div><strong>{asset.pageNumber}페이지 · 분리 이미지 {asset.extractedVisuals?.length ?? 0}개</strong><small className={asset.textSource}>{asset.textSource === "ocr" ? `OCR ${Math.round(asset.confidence * 100)}%` : asset.textSource === "embedded" ? "텍스트 포함" : "원문 근거"}</small></div>{asset.extractedVisuals?.length ? <div className="pdf-extracted-strip">{asset.extractedVisuals.map((visual) => <button className={visual.selected ? "selected" : ""} key={visual.id} aria-label={`${asset.pageNumber}페이지 ${visual.kind === "photo" ? "사진" : "그래픽"} ${visual.selected ? "제외" : "포함"}`} onClick={() => setProfile((current) => ({ ...current, pdfPageAssets: current.pdfPageAssets.map((page) => page.pageNumber !== asset.pageNumber ? page : { ...page, selected: true, extractedVisuals: page.extractedVisuals?.map((item) => item.id === visual.id ? { ...item, selected: !item.selected } : item) }) }))}><img src={visual.dataUrl} alt={`${asset.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`} /><span>{visual.kind === "photo" ? "사진" : "그래픽"}</span></button>)}</div> : <p className="pdf-no-visual">분리 가능한 큰 이미지가 없습니다. 텍스트·경력 근거로만 사용됩니다.</p>}</article>)}</div></div>}
     {extracted.length > 0 && <div className="review-panel"><div className="review-title"><h2>AI·PDF 분석 결과</h2><span>{extracted.length}개 항목</span></div>{extracted.map((item) => <div className="review-item" key={item.id}><div className={`confidence ${item.confidence < .7 ? "low" : ""}`}>{Math.round(item.confidence * 100)}%</div><label><span>{item.label}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><textarea value={item.value} disabled={item.status === "excluded"} onChange={(event) => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, value: event.target.value, status: "edited" } : target) }))} /></label><button className={item.status === "excluded" ? "excluded" : ""} onClick={() => setProfile((current) => ({ ...current, extractedItems: current.extractedItems.map((target) => target.id === item.id ? { ...target, status: target.status === "excluded" ? "approved" : "excluded" } : target) }))}>{item.status === "excluded" ? "복원" : "제외"}</button></div>)}</div>}
     <div className="form-card"><h2>기본 정보</h2><div className="form-grid"><label><span>활동명 *</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아름 / 아트밴드" /></label><label><span>활동 형태 *</span><div className="segmented"><button className={profile.artistType === "개인" ? "selected" : ""} onClick={() => update("artistType", "개인")}>개인</button><button className={profile.artistType === "단체" ? "selected" : ""} onClick={() => update("artistType", "단체")}>단체</button></div></label><label><span>주 활동 분야 *</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>주요 활동 지역</span><input value={profile.region} onChange={(event) => update("region", event.target.value)} placeholder="예: 서울·경기 / 전국" /></label><label><span>연락 방법</span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><label className="video-link-field"><span>대표 영상 링크</span><input value={profile.videoUrl} onChange={(event) => update("videoUrl", event.target.value)} placeholder="https://youtu.be/..." /><small>YouTube 주소를 입력하면 PPT에 클릭 가능한 영상 바로가기 버튼이 생성됩니다.</small></label></div></div>
     <div className="form-card identity-card"><div className="card-heading"><div><h2>동명이인 방지 정보</h2><p>모두 작성할 필요는 없습니다. 이름 외 식별 단서가 3개 이상이면 검색 정확도가 높아집니다.</p></div><span className={`identity-level level-${identityLevel === "높음" ? "high" : identityLevel === "보통" ? "medium" : "low"}`}>검색 정확도 {identityLevel} · {identitySignalCount}개 단서</span></div><div className="form-grid"><label><span>소속·단체명</span><input value={profile.affiliation} onChange={(event) => update("affiliation", event.target.value)} placeholder="예: ○○예술단 / 소속사" /></label><label><span>활동 시작 연도</span><input value={profile.activeSince} onChange={(event) => update("activeSince", event.target.value)} placeholder="예: 2018" /></label><label className="wide-field"><span>대표 경력 한 줄</span><input value={profile.identityHint} onChange={(event) => update("identityHint", event.target.value)} placeholder="예: 2024 세종문화회관 단독 공연" /></label><label className="wide-field"><span>공식 링크</span><input value={profile.officialUrl} onChange={(event) => update("officialUrl", event.target.value)} placeholder="공식 홈페이지·Instagram·YouTube·쇼글·OTR 주소" /><small>공식 링크는 가장 강한 동일 인물 확인 단서로 사용됩니다.</small></label></div></div>
@@ -597,18 +622,16 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
   const [candidates, setCandidates] = useState<WebImageCandidate[]>([]);
   const externalImages = profile.externalImages ?? [];
   const photoAssets = collectDeckAssets(profile);
-  const visualAssets = photoAssets.filter((asset) => asset.kind !== "pdf_page");
-  const pdfAssets = photoAssets.filter((asset) => asset.kind === "pdf_page");
+  const visualAssets = photoAssets;
   const galleryVisualAssets = visualAssets.slice(2);
   const availableImageSlots = Math.max(0, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length);
   const missingImageCount = Math.min(3, availableImageSlots, Math.max(0, 5 - visualAssets.length));
   const searchIdentitySignalCount = [profile.primaryField, profile.region, profile.affiliation, profile.activeSince, profile.identityHint, profile.officialUrl, profile.representativeImage].filter(Boolean).length;
-  const galleryPageCount = Math.max(pdfAssets.length ? 0 : 1, Math.ceil(galleryVisualAssets.length / 3));
+  const galleryPageCount = Math.max(1, Math.ceil(galleryVisualAssets.length / 3));
   const photoPlacements = [
     { page: "표지", guide: "얼굴과 분위기가 선명한 세로 대표사진", slots: 1, assets: visualAssets.slice(0, 1) },
     { page: "소개", guide: "작업 또는 연주 중인 자연스러운 가로 사진", slots: 1, assets: visualAssets.slice(1, 2) },
-    ...Array.from({ length: galleryPageCount }, (_, index) => ({ page: `활동 갤러리${galleryPageCount > 1 ? ` ${index + 1}` : ""}`, guide: "공연 전경 · 관객 반응 · 연주/작품 디테일", slots: 3, assets: galleryVisualAssets.slice(index * 3, index * 3 + 3) })),
-    ...pdfAssets.map((asset) => ({ page: `PDF 원문 자료 · ${asset.pageNumber}p`, guide: "선택한 원문을 한 페이지에 크게 배치하고 텍스트는 경력·수상 정보에도 반영", slots: 1, assets: [asset] })),
+    ...Array.from({ length: galleryPageCount }, (_, index) => ({ page: `활동 갤러리${galleryPageCount > 1 ? ` ${index + 1}` : ""}`, guide: "공연 전경 · 관객 반응 · 원문에서 분리한 사진·포스터", slots: 3, assets: galleryVisualAssets.slice(index * 3, index * 3 + 3) })),
   ];
 
   const researchIdentityQuery = [profile.artistName, profile.affiliation, profile.primaryField, profile.region, profile.identityHint].filter(Boolean).join(" ");
@@ -777,8 +800,9 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
     setSearchNotice(`워터마크와 권리 위험 검수를 통과한 추천 사진 ${additions.length}장을 추가했어요. 최종 사용 전 출처 페이지의 사용 조건도 확인해 주세요.`);
   };
 
-  return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>모든 사진은 배경으로 늘리지 않고 원본 비율을 유지한 독립 프레임으로 PPT에 배치합니다.</p></div>
-    {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF 선택 자산 자동 반영</h2><p>선택한 페이지는 각각 독립된 원문 자료 페이지로 들어가며, 추출된 텍스트는 연혁·수상·소개 작성에도 사용됩니다.</p></div><span className="photo-total-count">{profile.pdfPageAssets.filter((asset) => asset.selected).length}페이지 포함</span></div><div className="selected-pdf-assets">{profile.pdfPageAssets.filter((asset) => asset.selected).map((asset) => <article key={asset.pageNumber}><img src={asset.previewDataUrl} alt={`선택한 PDF ${asset.pageNumber}페이지`} /><strong>{asset.pageNumber}페이지</strong><div><button onClick={() => update("representativeImage", asset.previewDataUrl)}>대표 이미지로도 사용</button><span className="pdf-auto-badge">PPT 자동 포함</span></div></article>)}</div></div>}
+  const selectedPdfVisuals = profile.pdfPageAssets.flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected).map((visual) => ({ ...visual, pageNumber: page.pageNumber })) : []);
+  return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>원문 페이지 전체는 PPT에 넣지 않습니다. 사진은 자연스럽게 크롭하고 포스터·그래픽은 잘리지 않게 독립 프레임으로 배치합니다.</p></div>
+    {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF에서 분리한 디자인 자산</h2><p>원문의 텍스트는 경력·수상 근거로 사용하고, 아래 사진·그림만 실제 PPT 디자인에 배치합니다.</p></div><span className="photo-total-count">{selectedPdfVisuals.length}개 이미지 포함</span></div>{selectedPdfVisuals.length ? <div className="selected-pdf-assets">{selectedPdfVisuals.map((visual) => <article key={`${visual.pageNumber}-${visual.id}`}><img src={visual.dataUrl} alt={`PDF ${visual.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`} /><strong>{visual.pageNumber}페이지 · {visual.kind === "photo" ? "사진" : "그래픽"}</strong><div><button onClick={() => update("representativeImage", visual.dataUrl)}>대표 이미지로 사용</button><span className="pdf-auto-badge">개별 자산 배치</span></div></article>)}</div> : <div className="empty-media">선택한 원문에서 분리할 수 있는 큰 이미지가 없습니다. 원문은 정보 근거로만 사용되며 PPT 화면에는 들어가지 않습니다.</div>}</div>}
     <div className="form-card research-card"><div className="card-heading"><div><h2>무료 외부 기록 검색</h2><p>유료 검색 API 없이 나무위키·OTR·쇼글 검색을 열고, 본인 자료로 확인한 내용만 PPT에 반영합니다.</p></div><span className="free-mode-badge">API 비용 0원</span></div><div className="free-search-links">{researchSearchLinks.map((source) => <a href={source.href} target="_blank" rel="noreferrer" key={source.key}><Search size={14} /> {source.label}에서 검색</a>)}</div><div className="manual-research-form"><label><span>확인한 출처</span><select value={researchSource} onChange={(event) => setResearchSource(event.target.value as FreeResearchSource)}>{freeResearchSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}</select></label><label><span>확인한 원문 링크</span><input type="url" value={researchSourceUrl} onChange={(event) => setResearchSourceUrl(event.target.value)} placeholder="https://..." /></label><label className="wide-field"><span>본인과 일치하는 내용</span><textarea value={researchText} onChange={(event) => setResearchText(event.target.value)} placeholder={"한 줄에 하나씩 입력하세요.\n예: 2024 세종문화회관 단독 공연\n예: 2023 ○○예술대상 수상"} /></label><button onClick={addVerifiedResearch}>확인한 기록을 연혁·PPT에 반영</button></div>{researchNotice && <div className="notice warning">{researchNotice}</div>}<small>검색 결과는 자동으로 가져오지 않으므로 검색 비용이 발생하지 않습니다. 이름·분야·지역·소속·대표사진을 대조한 뒤 본인 원문만 입력해 주세요. 출처 링크는 PPT 근거에 함께 저장됩니다.</small></div>
     <div className="form-card ai-image-fill-card"><div className="card-heading"><div><h2>빈 사진 영역 AI로 채우기</h2><p>대표사진과 확인된 경력·장소를 바탕으로 최대 3장의 보조 이미지를 만듭니다. 실제 공연 사진이 아닌 AI 연출 이미지로 명확히 표시됩니다.</p></div><button disabled={generatingImages || !profile.representativeImage || missingImageCount === 0} onClick={() => void generateMissingImages()}>{generatingImages ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} {missingImageCount ? `${missingImageCount}장 생성` : "기본 사진 충족"}</button></div>{generationNotice && <div className="notice warning">{generationNotice}</div>}<small>실제 업로드 사진 → 사용자가 승인한 웹 사진 → AI 연출 이미지 순으로 PPT에 배치됩니다. AI 이미지는 경력의 시각적 이해를 돕는 용도이며 실제 현장 증빙으로 사용하지 않습니다.</small></div>
     <div className="form-card"><div className="card-heading"><div><h2>웹 사진 후보 찾기</h2><p>등록 단계에서 올린 사진 1 대표사진을 기준으로 관련 활동 이미지를 검색합니다.</p></div><button disabled={searching || !profile.artistName || !profile.representativeImage} onClick={() => void searchArtistImages()}>{searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />} 웹에서 관련 사진 찾기</button></div>{!profile.representativeImage && <div className="empty-media">프로필 정보 단계의 사진 1 대표사진을 먼저 등록해 주세요.</div>}</div>
@@ -801,9 +825,7 @@ function PreviewStep({ profile, template, busy, notice, onEdit, onRetry, onDownl
     const careers = plan.careerIndexes.map((index) => deckFacts[index]).filter(Boolean);
     if (plan.type === "cover") return <div className="ai-preview-slide ai-cover has-image" key={planIndex}>{images[0] ? <img src={images[0]} alt="표지" /> : <div className="ai-photo-placeholder cover"><strong>PHOTO NEEDED</strong><span>{plan.imagePurpose || "얼굴이 선명한 세로 대표사진 · 반신 또는 전신"}</span></div>}<div className="ai-image-shade" /><div className="ai-slide-copy"><span>{plan.eyebrow}</span><h1>{plan.title}</h1><p>{plan.body}</p><small>{profile.primaryField} · {profile.region}</small></div></div>;
     if (plan.type === "gallery") {
-      const isPdfArchive = plan.imageRefs.length === 1 && plan.imageRefs[0].startsWith("pdf-page-");
-      const guides = isPdfArchive ? [plan.imagePurpose || "선택한 PDF 원문 자료"] : galleryGuides;
-      return <div className={`ai-preview-slide ai-gallery ${isPdfArchive ? "pdf-archive" : ""}`} key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{plan.body && <p>{plan.body}</p>}<div className={`ai-gallery-grid count-${isPdfArchive ? 1 : 3}`}>{guides.map((guide, index) => images[index] ? <img src={images[index]} alt={isPdfArchive ? "PDF 원문 자료" : `공연 이미지 ${index + 1}`} key={guide} /> : <div className="ai-photo-placeholder" key={guide}><strong>PHOTO NEEDED</strong><span>{guide}</span></div>)}</div></div>;
+      return <div className="ai-preview-slide ai-gallery" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{plan.body && <p>{plan.body}</p>}<div className="ai-gallery-grid count-3">{galleryGuides.map((guide, index) => images[index] ? <img src={images[index]} alt={`개별 활동 이미지 ${index + 1}`} key={guide} /> : <div className="ai-photo-placeholder" key={guide}><strong>PHOTO NEEDED</strong><span>{guide}</span></div>)}</div></div>;
     }
     if (plan.type === "strengths") return <div className="ai-preview-slide ai-strengths" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div>{plan.bullets.slice(0, 3).map((item, index) => <article key={index}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>;
     if (plan.type === "career") {

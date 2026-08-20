@@ -46,6 +46,16 @@ export interface PdfPageAsset {
   textSource: "embedded" | "ocr" | "none";
   confidence: number;
   selected: boolean;
+  extractedVisuals?: PdfExtractedVisual[];
+}
+
+export interface PdfExtractedVisual {
+  id: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  kind: "photo" | "graphic";
+  selected: boolean;
 }
 
 export interface ExternalImageAsset {

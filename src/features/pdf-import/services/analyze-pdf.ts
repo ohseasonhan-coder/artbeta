@@ -2,11 +2,73 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCanvas, DOMMatrix, ImageData, Path2D } from "@napi-rs/canvas";
-import { PdfPageAsset } from "@/types/profile";
+import { PdfExtractedVisual, PdfPageAsset } from "@/types/profile";
 
 const MIN_EMBEDDED_TEXT_LENGTH = 40;
 const PRIMARY_RENDER_SIZE = 1400;
 const FALLBACK_RENDER_SIZE = 900;
+
+interface PdfImageObject { width: number; height: number; data?: Uint8Array | Uint8ClampedArray }
+
+function rgbaPixels(image: PdfImageObject) {
+  if (!image.data) return null;
+  const pixels = image.width * image.height;
+  if (image.data.length === pixels * 4) return new Uint8ClampedArray(image.data);
+  if (image.data.length === pixels * 3) {
+    const rgba = new Uint8ClampedArray(pixels * 4);
+    for (let source = 0, target = 0; source < image.data.length; source += 3, target += 4) {
+      rgba[target] = image.data[source]; rgba[target + 1] = image.data[source + 1]; rgba[target + 2] = image.data[source + 2]; rgba[target + 3] = 255;
+    }
+    return rgba;
+  }
+  return null;
+}
+
+function visualKind(data: Uint8ClampedArray): PdfExtractedVisual["kind"] {
+  const colors = new Set<string>();
+  const stride = Math.max(4, Math.floor(data.length / 900 / 4) * 4);
+  for (let index = 0; index < data.length; index += stride) colors.add(`${data[index] >> 4}${data[index + 1] >> 4}${data[index + 2] >> 4}`);
+  return colors.size > 70 ? "photo" : "graphic";
+}
+
+async function extractPageVisuals(
+  page: Awaited<ReturnType<Awaited<ReturnType<(typeof import("pdfjs-dist/legacy/build/pdf.mjs"))["getDocument"]>["promise"]>["getPage"]>>,
+  ops: (typeof import("pdfjs-dist/legacy/build/pdf.mjs"))["OPS"],
+  pageNumber: number,
+) {
+  const viewport = page.getViewport({ scale: 1 });
+  const pageRatio = viewport.width / viewport.height;
+  const operatorList = await page.getOperatorList();
+  const objectStore = (page as unknown as { objs: { get: (id: string, callback: (image: PdfImageObject) => void) => void } }).objs;
+  const candidates: PdfImageObject[] = [];
+  for (let index = 0; index < operatorList.fnArray.length; index += 1) {
+    const operation = operatorList.fnArray[index];
+    const args = operatorList.argsArray[index];
+    if (operation === ops.paintImageXObject && typeof args?.[0] === "string") {
+      const image = await new Promise<PdfImageObject | null>((resolve) => objectStore.get(args[0], (value) => resolve(value || null)));
+      if (image) candidates.push(image);
+    } else if (operation === ops.paintInlineImageXObject && args?.[0]) candidates.push(args[0] as PdfImageObject);
+  }
+  const signatures = new Set<string>();
+  const visuals: PdfExtractedVisual[] = [];
+  for (const image of candidates.sort((a, b) => b.width * b.height - a.width * a.height)) {
+    if (image.width < 180 || image.height < 150 || image.width * image.height < 80_000) continue;
+    const ratio = image.width / image.height;
+    const looksLikeFullPageScan = Math.abs(Math.log(ratio / pageRatio)) < 0.07 && Math.max(image.width, image.height) > Math.max(viewport.width, viewport.height) * 1.6;
+    if (looksLikeFullPageScan) continue;
+    const pixels = rgbaPixels(image); if (!pixels) continue;
+    const signature = `${image.width}x${image.height}:${Array.from(pixels.slice(0, 48)).join("-")}`;
+    if (signatures.has(signature)) continue;
+    signatures.add(signature);
+    const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
+    const outputWidth = Math.max(1, Math.round(image.width * scale)); const outputHeight = Math.max(1, Math.round(image.height * scale));
+    const source = createCanvas(image.width, image.height); source.getContext("2d").putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
+    const canvas = createCanvas(outputWidth, outputHeight); canvas.getContext("2d").drawImage(source, 0, 0, outputWidth, outputHeight);
+    visuals.push({ id: `p${pageNumber}-visual-${visuals.length + 1}`, dataUrl: `data:image/jpeg;base64,${canvas.toBuffer("image/jpeg", 88).toString("base64")}`, width: outputWidth, height: outputHeight, kind: visualKind(pixels), selected: true });
+    if (visuals.length >= 4) break;
+  }
+  return visuals;
+}
 
 function installPdfGraphicsGlobals() {
   const target = globalThis as unknown as Record<string, unknown>;
@@ -68,11 +130,14 @@ export async function analyzePdf(data: Uint8Array): Promise<PdfAnalysisResult> {
     embeddedText: string;
     image: Buffer;
     canOcr: boolean;
+    extractedVisuals: PdfExtractedVisual[];
   }> = [];
 
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     let embeddedText = "";
     let page = await document.getPage(pageNumber);
+    let extractedVisuals: PdfExtractedVisual[] = [];
+    try { extractedVisuals = await extractPageVisuals(page, pdfjs.OPS, pageNumber); } catch { warnings.push(`${pageNumber}페이지의 개별 이미지 분리는 건너뛰었습니다.`); }
     try {
       const content = await page.getTextContent();
       embeddedText = content.items.map((item) => ("str" in item ? item.str : "")).join(" ").replace(/\s+/g, " ").trim();
@@ -96,7 +161,7 @@ export async function analyzePdf(data: Uint8Array): Promise<PdfAnalysisResult> {
         warnings.push(`${pageNumber}페이지의 미리보기를 만들지 못했습니다. 추출된 텍스트만 사용합니다.`);
       }
     }
-    renderedPages.push({ pageNumber, embeddedText, canOcr, ...rendered });
+    renderedPages.push({ pageNumber, embeddedText, canOcr, extractedVisuals, ...rendered });
     page.cleanup();
   }
 
@@ -138,6 +203,7 @@ export async function analyzePdf(data: Uint8Array): Promise<PdfAnalysisResult> {
       textSource: hasEmbeddedText ? "embedded" : ocr?.text ? "ocr" : "none",
       confidence: hasEmbeddedText ? 0.98 : ocr?.confidence ?? 0,
       selected: false,
+      extractedVisuals: page.extractedVisuals,
     };
   });
 
