@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, BriefcaseBusiness, CalendarDays, CheckCircle2, ChevronDown, CircleDollarSign, MapPin, Plus, Search, Sparkles, UserRoundSearch, UsersRound, X } from "lucide-react";
 import { loadProfileDraft } from "@/features/profile-source/services/draft-storage";
+import { useSiteSettings } from "@/features/site-settings/SiteSettingsProvider";
 import type { ProfileData } from "@/types/profile";
 import type { CompensationType, TeamPost, TeamPostInput, TeamPostType } from "@/types/team";
 
@@ -40,6 +41,7 @@ function profileToInput(profile: ProfileData, image: string): TeamPostInput {
 }
 
 export default function TeamBoard() {
+  const { config } = useSiteSettings();
   const [posts, setPosts] = useState<TeamPost[]>(demos);
   const [storage, setStorage] = useState<"loading" | "local" | "shared">("loading");
   const [query, setQuery] = useState("");
@@ -75,11 +77,12 @@ export default function TeamBoard() {
   }, []);
 
   const myIds = useMemo(() => new Set(Object.keys(JSON.parse(typeof window === "undefined" ? "{}" : localStorage.getItem(EDIT_TOKENS_KEY) || "{}"))), [posts]);
-  const regions = useMemo(() => ["전체 지역", ...Array.from(new Set(posts.map((post) => post.region).filter(Boolean)))], [posts]);
-  const filtered = useMemo(() => posts.filter((post) => {
+  const visiblePosts = useMemo(() => config.team.showDemoPosts ? posts : posts.filter((post) => !post.isDemo), [config.team.showDemoPosts, posts]);
+  const regions = useMemo(() => ["전체 지역", ...Array.from(new Set(visiblePosts.map((post) => post.region).filter(Boolean)))], [visiblePosts]);
+  const filtered = useMemo(() => visiblePosts.filter((post) => {
     const haystack = [post.title, post.artistName, post.primaryField, post.region, post.wantedRole, post.activityType, post.description, ...post.highlights].join(" ").toLowerCase();
     return (!query.trim() || haystack.includes(query.trim().toLowerCase())) && (field === "전체 분야" || post.primaryField === field) && (region === "전체 지역" || post.region === region) && (postType === "all" || post.postType === postType) && (!mineOnly || myIds.has(post.id));
-  }).sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()), [posts, query, field, region, postType, mineOnly, myIds]);
+  }).sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()), [visiblePosts, query, field, region, postType, mineOnly, myIds]);
 
   const savePost = async () => {
     if (![form.title, form.artistName, form.primaryField, form.region, form.wantedRole, form.description, form.contact].every((value) => String(value).trim())) return setNotice("제목·활동명·분야·지역·필요 역할·소개·연락 방법을 확인해 주세요.");
@@ -116,10 +119,10 @@ export default function TeamBoard() {
   };
 
   return <main className="team-shell">
-    <header className="team-topbar"><Link className="brand" href="/"><span className="brand-mark">A</span><span>ARTFOLIO</span></Link><nav><Link href="/">프로필 만들기</Link><Link className="selected" href="/team">팀원 찾기</Link></nav><button onClick={() => setOpenForm(true)}><Plus size={15} /> 모집글 작성</button></header>
-    <section className="team-hero"><div><span><Sparkles size={14} /> PROFILE-BASED MATCHING</span><h1>프로필로 확인하고<br />함께할 예술인을 찾으세요</h1><p>자유게시판의 긴 글 대신 분야·지역·역할·일정만 비교합니다. 완성한 프로필이 모집글에 자동으로 연결됩니다.</p></div><div className="team-hero-card"><UsersRound /><strong>{posts.filter((post) => post.status === "open").length}</strong><span>현재 모집·합류 글</span><small>{storage === "shared" ? "모든 사용자에게 공개 중" : "무료 기기 저장 체험 모드"}</small></div></section>
+    <header className="team-topbar"><Link className="brand" href="/"><span className="brand-mark">{config.brand.mark}</span><span>{config.brand.name}</span></Link><nav><Link href="/">{config.navigation.studio}</Link><Link className="selected" href="/team">{config.navigation.team}</Link></nav><button onClick={() => setOpenForm(true)}><Plus size={15} /> {config.team.createLabel}</button></header>
+    <section className="team-hero"><div><span><Sparkles size={14} /> {config.team.eyebrow}</span><h1>{config.team.title.split("\n").map((line, index) => <span key={`${line}-${index}`}>{line}{index < config.team.title.split("\n").length - 1 && <br />}</span>)}</h1><p>{config.team.description}</p></div><div className="team-hero-card"><UsersRound /><strong>{visiblePosts.filter((post) => post.status === "open").length}</strong><span>현재 모집·합류 글</span><small>{storage === "shared" ? "모든 사용자에게 공개 중" : "무료 기기 저장 체험 모드"}</small></div></section>
     <section className="team-board-wrap"><div className="team-tabs"><button className={postType === "all" && !mineOnly ? "selected" : ""} onClick={() => { setPostType("all"); setMineOnly(false); }}>전체</button><button className={postType === "recruit" && !mineOnly ? "selected" : ""} onClick={() => { setPostType("recruit"); setMineOnly(false); }}>팀원 구해요</button><button className={postType === "join" && !mineOnly ? "selected" : ""} onClick={() => { setPostType("join"); setMineOnly(false); }}>팀을 찾고 있어요</button><button className={mineOnly ? "selected" : ""} onClick={() => setMineOnly(true)}>내 글</button></div>
-      <div className="team-filters"><label><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="역할·분야·활동명만 검색" /></label><select value={field} onChange={(event) => setField(event.target.value)}>{fields.map((item) => <option key={item}>{item}</option>)}</select><select value={region} onChange={(event) => setRegion(event.target.value)}>{regions.map((item) => <option key={item}>{item}</option>)}</select></div>
+      <div className="team-filters"><label><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={config.team.searchPlaceholder} /></label><select value={field} onChange={(event) => setField(event.target.value)}>{fields.map((item) => <option key={item}>{item}</option>)}</select><select value={region} onChange={(event) => setRegion(event.target.value)}>{regions.map((item) => <option key={item}>{item}</option>)}</select></div>
       {notice && <div className="team-notice"><CheckCircle2 /> {notice}<button onClick={() => setNotice("")}><X /></button></div>}
       <div className="team-result-head"><div><strong>{filtered.length}개</strong>의 관련 글</div><span>모집 중인 글을 먼저 표시합니다</span></div>
       <div className="team-post-grid">{filtered.map((post) => <article className={`${post.status === "closed" ? "closed" : ""} ${expanded === post.id ? "expanded" : ""}`} key={post.id}><div className="team-profile-image">{post.profileImage ? <img src={post.profileImage} alt={`${post.artistName} 대표사진`} /> : <span>{post.artistName.slice(0, 1)}</span>}{post.isDemo && <b>예시</b>}</div><div className="team-post-copy"><div className="team-post-meta"><span>{post.postType === "recruit" ? "팀원 구해요" : "팀을 찾고 있어요"}</span><i>{post.status === "open" ? "모집 중" : "모집 완료"}</i></div><h2>{post.title}</h2><strong>{post.artistName}</strong><div className="team-tags"><span>{post.primaryField}</span><span><MapPin /> {post.region}</span><span><UserRoundSearch /> {post.wantedRole}</span><span><CircleDollarSign /> {compensationLabels[post.compensation]}</span></div>{expanded === post.id && <div className="team-post-detail"><p>{post.description}</p>{post.highlights.length > 0 && <ul>{post.highlights.map((highlight) => <li key={highlight}>{highlight}</li>)}</ul>}<div><span><CalendarDays /> {post.projectDate || "일정 협의"}</span><span><BriefcaseBusiness /> {post.activityType} · {post.headcount}명</span></div><strong>문의 방법 · {post.contact}</strong>{post.profileUrl && <a href={post.profileUrl} target="_blank" rel="noreferrer">공식 프로필·영상 보기 <ArrowRight /></a>}</div>}<div className="team-card-actions"><button onClick={() => setExpanded(expanded === post.id ? null : post.id)}>{expanded === post.id ? "접기" : "모집 내용 보기"} <ChevronDown /></button>{myIds.has(post.id) && <button onClick={() => void toggleStatus(post)}>{post.status === "open" ? "모집 완료로 변경" : "다시 모집하기"}</button>}</div></div></article>)}</div>

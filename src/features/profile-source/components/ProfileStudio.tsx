@@ -14,6 +14,7 @@ import { buildDeckFacts, formatCareerFact } from "@/features/profile-export/pptx
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
 import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
+import { useSiteSettings } from "@/features/site-settings/SiteSettingsProvider";
 
 interface PdfUploadResponse {
   text: string;
@@ -137,6 +138,7 @@ function toggleInList(list: string[], value: string, limit = 99) {
 }
 
 export default function ProfileStudio() {
+  const { config: siteConfig } = useSiteSettings();
   const [profile, setProfile] = useState<ProfileData>(initialProfile);
   const [step, setStep] = useState(0);
   const [pdfName, setPdfName] = useState("");
@@ -404,8 +406,8 @@ export default function ProfileStudio() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <button className="brand" onClick={() => setStep(0)} aria-label="홈으로"><span className="brand-mark">A</span><span>ARTFOLIO</span></button>
-        <nav><button>프로필 제작</button><Link href="/team">팀원 찾기</Link><Link href="/admin/design-templates">디자인 관리</Link><button onClick={resetDraft}>새로 시작</button></nav>
+        <button className="brand" onClick={() => setStep(0)} aria-label="홈으로"><span className="brand-mark">{siteConfig.brand.mark}</span><span>{siteConfig.brand.name}</span></button>
+        <nav><button>{siteConfig.navigation.studio}</button><Link href="/team">{siteConfig.navigation.team}</Link><Link href="/admin/design-templates">{siteConfig.navigation.admin}</Link><button onClick={resetDraft}>{siteConfig.navigation.newProject}</button></nav>
         <button className="icon-button"><Menu size={20} /></button>
       </header>
 
@@ -437,6 +439,7 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
   onSkip: () => void;
 }) {
+  const { config } = useSiteSettings();
   const [linkValue, setLinkValue] = useState(profile.videoUrl || profile.officialUrl);
   const saveLink = () => {
     const link = linkValue.trim();
@@ -444,20 +447,23 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
     if (isYouTubeVideoUrl(link)) update("videoUrl", normalizeVideoUrl(link));
     else update("officialUrl", link);
   };
+  const sectionContent: Record<string, React.ReactNode> = {
+    identity: <div className="quick-identity-row" key="identity"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>,
+    upload: <label className={`unified-dropzone ${busy ? "busy" : ""}`} key="upload"><input type="file" accept="application/pdf,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : config.home.uploadTitle}</strong><small>{config.home.uploadDescription}</small></label>,
+    link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 붙여넣기 <small>선택</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onBlur={saveLink} placeholder="홈페이지·Instagram·YouTube 링크" /></label><button onClick={saveLink}>링크 저장</button></div>,
+    aiStatus: <div className="quick-ai-state" key="aiStatus"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>,
+  };
   return <section className="hero quick-start-page">
-    <div className="eyebrow"><Sparkles size={14} /> 2분 프로필 만들기</div>
-    <h1>가지고 있는 자료를<br /><em>그냥 넣어주세요</em></h1>
-    <p>PDF·사진·포스터를 구분할 필요가 없습니다. 내용을 읽고 대표사진, 경력, 수상, 공연 기록으로 자동 정리합니다.</p>
+    <div className="eyebrow"><Sparkles size={14} /> {config.home.eyebrow}</div>
+    <h1>{config.home.title}<br /><em>{config.home.accentTitle}</em></h1>
+    <p>{config.home.description}</p>
     <div className="quick-start-card">
-      <div className="quick-identity-row"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>
-      <label className={`unified-dropzone ${busy ? "busy" : ""}`}><input type="file" accept="application/pdf,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : "PDF·사진·포스터 한 번에 추가"}</strong><small>파일을 선택하면 바로 분석을 시작합니다 · PDF 30MB, 사진 각 10MB</small></label>
-      <div className="quick-link-row"><label><span>링크가 있다면 붙여넣기 <small>선택</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onBlur={saveLink} placeholder="홈페이지·Instagram·YouTube 링크" /></label><button onClick={saveLink}>링크 저장</button></div>
+      {config.home.sections.filter((section) => section.enabled && section.key !== "trust").map((section) => sectionContent[section.key])}
       {(busy || progress > 0) && <div className="quick-analysis-progress"><div><span style={{ width: `${progress}%` }} /></div><strong>{fileName || "업로드한 자료"} · {progress}%</strong></div>}
       {notice && <div className="notice warning">{notice}</div>}
-      <div className="quick-ai-state"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>
     </div>
-    <button className="text-start-button" onClick={onSkip}>자료가 없어요 · 이름부터 간단히 작성하기 <ArrowRight size={15} /></button>
-    <div className="trust-row"><span><CheckCircle2 /> 자동 저장</span><span><CheckCircle2 /> 확인한 내용만 사용</span><span><CheckCircle2 /> 실제 PPTX 다운로드</span></div>
+    <button className="text-start-button" onClick={onSkip}>{config.home.noMaterialLabel} <ArrowRight size={15} /></button>
+    {config.home.sections.find((section) => section.key === "trust")?.enabled && <div className="trust-row">{config.home.trustItems.map((item) => <span key={item}><CheckCircle2 /> {item}</span>)}</div>}
   </section>;
 }
 

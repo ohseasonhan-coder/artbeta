@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { SiteSettingsProvider } from "@/features/site-settings/SiteSettingsProvider";
 
 export const metadata: Metadata = {
   title: "아트폴리오 | 예술인 프로필 스튜디오",
@@ -9,8 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
-      <body>{children}</body>
+      <body><SiteSettingsProvider>{children}</SiteSettingsProvider></body>
     </html>
   );
 }
-

@@ -24,3 +24,12 @@ create index if not exists team_posts_search_idx on public.team_posts (status, p
 alter table public.team_posts enable row level security;
 revoke all on table public.team_posts from anon, authenticated;
 grant select, insert, update on table public.team_posts to service_role;
+
+create table if not exists public.site_settings (
+  id text primary key,
+  config jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.site_settings enable row level security;
+revoke all on table public.site_settings from anon, authenticated;
+grant select, insert, update on table public.site_settings to service_role;
