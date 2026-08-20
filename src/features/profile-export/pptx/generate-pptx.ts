@@ -37,6 +37,8 @@ interface VisualAsset {
   dataUrl: string;
   sourceUrl?: string;
   sourceTitle?: string;
+  origin: "representative" | "upload" | "web" | "pdf" | "ai";
+  qualityScore?: number;
 }
 
 export interface DeckExportResult {
@@ -48,20 +50,31 @@ export interface DeckExportResult {
 
 export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
   const assets: VisualAsset[] = [];
-  if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", dataUrl: profile.representativeImage });
+  if (profile.representativeImage) assets.push({ id: "representative", kind: "representative", origin: "representative", dataUrl: profile.representativeImage });
   profile.performanceImages
-    .forEach((dataUrl, index) => { if (dataUrl) assets.push({ id: `performance-${index + 1}`, kind: "performance", dataUrl }); });
-  (profile.externalImages ?? []).filter((asset) => asset.source !== "ai").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
-  (profile.externalImages ?? []).filter((asset) => asset.source === "ai").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "generated", dataUrl: asset.dataUrl, sourceTitle: `AI 연출 이미지 · ${asset.title}${asset.promptBasis ? ` · 근거: ${asset.promptBasis}` : ""}` }));
+    .forEach((dataUrl, index) => { if (dataUrl) assets.push({ id: `performance-${index + 1}`, kind: "performance", origin: "upload", dataUrl }); });
+  (profile.externalImages ?? []).filter((asset) => asset.source !== "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", origin: "web", qualityScore: (asset.relevanceScore + asset.qualityScore) / 2, dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · ${asset.title}` }));
+  (profile.externalImages ?? []).filter((asset) => asset.source === "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "generated", origin: "ai", qualityScore: asset.qualityScore, dataUrl: asset.dataUrl, sourceTitle: `AI 연출 이미지 · ${asset.title}${asset.promptBasis ? ` · 근거: ${asset.promptBasis}` : ""}` }));
   profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => page.extractedVisuals?.filter((visual) => visual.selected).forEach((visual) => assets.push({
     id: `pdf-visual-${page.pageNumber}-${visual.id}`,
     kind: "pdf_visual",
+    origin: "pdf",
     visualType: visual.kind,
     pageNumber: page.pageNumber,
     dataUrl: visual.dataUrl,
     sourceTitle: `사용자 제공 PDF ${page.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`,
   })));
   return assets;
+}
+
+export function selectPortfolioAssets(assets: VisualAsset[], limit = 4) {
+  const representative = assets.find((asset) => asset.kind === "representative");
+  const originScore = { upload: 88, web: 82, pdf: 74, ai: 58, representative: 100 } as const;
+  const candidates = assets.filter((asset) => asset !== representative).sort((a, b) => {
+    const score = (asset: VisualAsset) => originScore[asset.origin] + (asset.qualityScore ?? 0.7) * 12 + (asset.visualType === "photo" ? 3 : 0);
+    return score(b) - score(a);
+  });
+  return [...(representative ? [representative] : []), ...candidates].slice(0, limit);
 }
 
 export function getDeckAssetData(profile: ProfileData, id: string) {
@@ -133,7 +146,7 @@ function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
     body: compactText(slide.body, body),
     bullets: slide.bullets.slice(0, bulletCount).map((item) => compactText(item, bulletLength)),
     careerIndexes: slide.careerIndexes.slice(0, 6),
-    imageRefs: slide.imageRefs.slice(0, 3),
+    imageRefs: slide.imageRefs.slice(0, 1),
   };
 }
 
@@ -161,17 +174,16 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     { type: "about", eyebrow: "IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: compactText(profile.introduction, 105), bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean).slice(0, 2), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: [], layout: "split_right" },
     { type: "strengths", eyebrow: "WHY THIS ARTIST", title: "현장에서 분명해지는 경쟁력", body: "", bullets: (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths).slice(0, 3), imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial" },
   ];
-  const galleryAssets = visualAssets.slice(2);
-  const galleryPageCount = Math.max(1, Math.ceil(galleryAssets.length / 3));
-  Array.from({ length: galleryPageCount }, (_, index) => {
+  const galleryAssets = visualAssets.slice(2, 4);
+  galleryAssets.forEach((asset, index) => {
     slides.push({
       type: "gallery",
       eyebrow: "ON STAGE",
       title: index ? "무대 밖에서도 이어지는 현장감" : "한눈에 확인하는 공연의 현장감",
       body: "",
       bullets: [],
-      imageRefs: galleryAssets.slice(index * 3, index * 3 + 3).map((asset) => asset.id),
-      imagePurpose: galleryPhotoGuides.join(" | "),
+      imageRefs: [asset.id],
+      imagePurpose: index ? galleryPhotoGuides[1] : galleryPhotoGuides[0],
       careerIndexes: [],
       layout: "gallery",
     });
@@ -189,20 +201,6 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     imageRefs: [], imagePurpose: "", careerIndexes: [], layout: "editorial",
   };
   return { narrative: "정체성, 현장 이미지, 검증된 경력, 섭외 문의 순서로 빠르게 설득", visualDirection: "짧은 문구와 실제 공연 이미지 중심", slides: paginateSlideCopy([...slides, contact]).map(fitSlideCopy) };
-}
-
-function ensureAssetCoverage(plan: DeckPlan, assets: VisualAsset[]) {
-  const usedIds = new Set(plan.slides.flatMap((slide) => slide.imageRefs));
-  const missingVisualAssets = assets.filter((asset) => !usedIds.has(asset.id));
-  const extraSlides: DeckSlidePlan[] = [];
-  for (let index = 0; index < missingVisualAssets.length; index += 3) {
-    const chunk = missingVisualAssets.slice(index, index + 3);
-    extraSlides.push({ type: "gallery", eyebrow: "ADDITIONAL WORKS", title: "추가 활동 자료로 보는 현장", body: "", bullets: [], imageRefs: chunk.map((asset) => asset.id), imagePurpose: galleryPhotoGuides.join(" | "), careerIndexes: [], layout: "gallery" });
-  }
-  if (!extraSlides.length) return plan;
-  const contactIndex = plan.slides.findIndex((slide) => slide.type === "contact");
-  const insertAt = contactIndex >= 0 ? contactIndex : plan.slides.length;
-  return { ...plan, slides: [...plan.slides.slice(0, insertAt), ...extraSlides, ...plan.slides.slice(insertAt)] };
 }
 
 async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
@@ -245,11 +243,10 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
 }
 
 export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: DeckPlan; meta: DeckPlanMeta }> {
-  const assets = collectDeckAssets(profile);
+  const assets = selectPortfolioAssets(collectDeckAssets(profile));
   try {
     const result = await requestDeckPlan(profile, assets);
-    const coveredPlan = ensureAssetCoverage(result.plan, assets);
-    return { plan: { ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
+    return { plan: { ...result.plan, slides: paginateSlideCopy(result.plan.slides).map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
   } catch (error) {
     const failure = error as Error & { code?: string };
     return {
@@ -270,7 +267,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const pptx = new PptxGenJS();
   const template = getTemplate(profile.templateKey);
   const p = template.palette;
-  const assets = collectDeckAssets(profile);
+  const assets = selectPortfolioAssets(collectDeckAssets(profile));
   const prepared = profile.deckPlan && profile.deckPlanMeta
     ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
     : await prepareDeckPlan(profile);
@@ -329,13 +326,10 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "gallery") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(slidePlan.title, { x: 0.78, y: 1.1, w: 11.8, h: 0.62, fontSize: 35, bold: true, color: hex(p.text), margin: 0 });
-      const frames = [{ x: 0.78, y: 2.05, w: 7.2, h: 4.45 }, { x: 8.18, y: 2.05, w: 4.38, h: 2.1 }, { x: 8.18, y: 4.4, w: 4.38, h: 2.1 }];
-      frames.forEach((frame, index) => {
-        const asset = images[index];
-        if (asset) addImage(slide, asset, frame.x, frame.y, frame.w, frame.h, galleryPhotoGuides[index], asset.visualType === "graphic" ? "contain" : "cover");
-        else addImagePlaceholder(slide, frame.x, frame.y, frame.w, frame.h, galleryPhotoGuides[index]);
-      });
+      slide.addText(slidePlan.title, { x: 0.78, y: 1.28, w: 4.05, h: 1.55, fontSize: 40, bold: true, color: hex(p.text), margin: 0, valign: "middle" });
+      if (slidePlan.body) slide.addText(slidePlan.body, { x: 0.82, y: 3.25, w: 3.85, h: 1.1, fontSize: 18, color: hex(p.muted), margin: 0, breakLine: false, valign: "middle" });
+      if (primaryImage) addImage(slide, primaryImage, 5.15, 0.52, 7.45, 6.32, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      else addImagePlaceholder(slide, 5.15, 0.52, 7.45, 6.32, slidePlan.imagePurpose || "대표 활동을 한눈에 보여주는 강한 가로 사진");
       addFooter(slide, slideIndex + 1);
       return;
     }

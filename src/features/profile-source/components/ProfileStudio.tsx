@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronRight, CircleHelp, Download, FileText,
@@ -9,7 +9,7 @@ import {
 import { ExternalImageAsset, ExtractedItem, initialProfile, PdfExtractedVisual, PdfPageAsset, ProfileData, ProfileImageCategory, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
-import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan } from "@/features/profile-export/pptx/generate-pptx";
+import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan, selectPortfolioAssets } from "@/features/profile-export/pptx/generate-pptx";
 import { buildDeckFacts, formatCareerFact } from "@/features/profile-export/pptx/deck-facts";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
@@ -620,18 +620,19 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
   const [researchSourceUrl, setResearchSourceUrl] = useState("");
   const [researchText, setResearchText] = useState("");
   const [candidates, setCandidates] = useState<WebImageCandidate[]>([]);
+  const autoSearchKey = useRef("");
   const externalImages = profile.externalImages ?? [];
-  const photoAssets = collectDeckAssets(profile);
+  const photoAssets = selectPortfolioAssets(collectDeckAssets(profile), 4);
   const visualAssets = photoAssets;
   const galleryVisualAssets = visualAssets.slice(2);
   const availableImageSlots = Math.max(0, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length);
-  const missingImageCount = Math.min(3, availableImageSlots, Math.max(0, 5 - visualAssets.length));
+  const missingImageCount = Math.min(2, availableImageSlots, Math.max(0, 4 - visualAssets.length));
   const searchIdentitySignalCount = [profile.primaryField, profile.region, profile.affiliation, profile.activeSince, profile.identityHint, profile.officialUrl, profile.representativeImage].filter(Boolean).length;
-  const galleryPageCount = Math.max(1, Math.ceil(galleryVisualAssets.length / 3));
+  const galleryPageCount = galleryVisualAssets.length;
   const photoPlacements = [
     { page: "표지", guide: "얼굴과 분위기가 선명한 세로 대표사진", slots: 1, assets: visualAssets.slice(0, 1) },
     { page: "소개", guide: "작업 또는 연주 중인 자연스러운 가로 사진", slots: 1, assets: visualAssets.slice(1, 2) },
-    ...Array.from({ length: galleryPageCount }, (_, index) => ({ page: `활동 갤러리${galleryPageCount > 1 ? ` ${index + 1}` : ""}`, guide: "공연 전경 · 관객 반응 · 원문에서 분리한 사진·포스터", slots: 3, assets: galleryVisualAssets.slice(index * 3, index * 3 + 3) })),
+    ...Array.from({ length: galleryPageCount }, (_, index) => ({ page: `대표 장면 ${index + 1}`, guide: "한 페이지에 메시지 하나와 가장 강한 활동 사진 한 장", slots: 1, assets: galleryVisualAssets.slice(index, index + 1) })),
   ];
 
   const researchIdentityQuery = [profile.artistName, profile.affiliation, profile.primaryField, profile.region, profile.identityHint].filter(Boolean).join(" ");
@@ -748,13 +749,13 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
     }
   };
 
-  const searchArtistImages = async () => {
+  const searchArtistImages = async (automatic = false) => {
     if (!profile.artistName.trim() || !profile.representativeImage) {
       setSearchNotice("아티스트명과 대표사진을 먼저 등록해 주세요.");
       return;
     }
     setSearching(true);
-    setSearchNotice("네이버·Google·YouTube에서 관련 이미지를 찾고 Gemini가 발표 자료 적합성을 검수하고 있어요.");
+    setSearchNotice("무료 Wikimedia와 연결된 네이버·Google·YouTube에서 실제 이미지를 찾고 Gemini가 포트폴리오 적합성을 검수하고 있어요.");
     try {
       const referenceImage = await makeImageThumbnail(profile.representativeImage, 768);
       const response = await fetch("/api/ai/search-artist-images", {
@@ -764,8 +765,12 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
       });
       const result = await response.json() as { candidates?: WebImageCandidate[]; configuredSources?: string[]; error?: string; code?: string };
       if (!response.ok) throw new Error(result.code === "SEARCH_NOT_CONFIGURED" ? "검색 API 키가 아직 설정되지 않았습니다. README의 웹 이미지 검색 설정을 확인해 주세요." : result.error || "이미지 검색에 실패했습니다.");
-      setCandidates(result.candidates ?? []);
-      setSearchNotice(`${(result.configuredSources ?? []).join(" · ")}에서 후보 ${(result.candidates ?? []).length}개를 찾았습니다. 동일인 자동 확정이 아니므로 출처를 열어 확인한 뒤 추가해 주세요.`);
+      const found = result.candidates ?? [];
+      setCandidates(found);
+      const remaining = Math.max(0, Math.min(2, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length));
+      const safeAdditions: ExternalImageAsset[] = found.filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)).slice(0, remaining).map((candidate) => ({ id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, usageStatus: "approved" }));
+      if (safeAdditions.length) update("externalImages", [...externalImages, ...safeAdditions]);
+      setSearchNotice(`${(result.configuredSources ?? []).join(" · ")}에서 후보 ${found.length}개를 실제 검색했습니다.${safeAdditions.length ? ` 동일 인물·품질·권리 검수를 통과한 핵심 사진 ${safeAdditions.length}장만 자동 선택했습니다.` : " 자동 사용 가능한 후보가 없어 직접 확인이 필요합니다."}${automatic ? "" : " 후보별 출처도 확인할 수 있습니다."}`);
     } catch (error) {
       setSearchNotice(error instanceof Error ? error.message : "이미지 검색을 완료하지 못했습니다.");
     } finally {
@@ -783,14 +788,14 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
       setSearchNotice(`공연·웹 사진은 합쳐서 최대 ${FILE_LIMITS.maxPerformanceImages}장까지 추가할 수 있어요.`);
       return;
     }
-    update("externalImages", [...externalImages, { id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, watermarkDetected: candidate.watermarkDetected, usageStatus: candidate.usageStatus }]);
+    update("externalImages", [...externalImages, { id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, watermarkDetected: candidate.watermarkDetected, usageStatus: "approved" }]);
   };
 
   const addRecommendedImages = () => {
     const remaining = Math.max(0, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length);
     const additions: ExternalImageAsset[] = candidates
       .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl))
-      .slice(0, remaining)
+      .slice(0, Math.min(2, remaining))
       .map((candidate) => ({ id: crypto.randomUUID(), dataUrl: candidate.dataUrl, source: candidate.source, sourceUrl: candidate.sourceUrl, title: candidate.title, relevanceScore: candidate.relevanceScore, qualityScore: candidate.qualityScore, usageStatus: "approved" }));
     if (!additions.length) {
       setSearchNotice("자동 추가할 수 있는 워터마크 없는 승인 후보가 없습니다. 출처와 사용 권한을 확인한 뒤 개별 후보를 선택해 주세요.");
@@ -800,17 +805,25 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
     setSearchNotice(`워터마크와 권리 위험 검수를 통과한 추천 사진 ${additions.length}장을 추가했어요. 최종 사용 전 출처 페이지의 사용 조건도 확인해 주세요.`);
   };
 
+  useEffect(() => {
+    const key = [profile.artistName, profile.primaryField, profile.affiliation, profile.identityHint, profile.representativeImage?.slice(0, 64)].join("|");
+    const hasApprovedWebImage = externalImages.some((image) => image.source !== "ai" && image.usageStatus === "approved");
+    if (!profile.artistName.trim() || !profile.representativeImage || hasApprovedWebImage || autoSearchKey.current === key) return;
+    autoSearchKey.current = key;
+    void searchArtistImages(true);
+  }, [profile.artistName, profile.primaryField, profile.affiliation, profile.identityHint, profile.representativeImage, externalImages]);
+
   const selectedPdfVisuals = profile.pdfPageAssets.flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected).map((visual) => ({ ...visual, pageNumber: page.pageNumber })) : []);
   return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>원문 페이지 전체는 PPT에 넣지 않습니다. 사진은 자연스럽게 크롭하고 포스터·그래픽은 잘리지 않게 독립 프레임으로 배치합니다.</p></div>
     {profile.pdfPageAssets.some((asset) => asset.selected) && <div className="form-card"><div className="card-heading"><div><h2>PDF에서 분리한 디자인 자산</h2><p>원문의 텍스트는 경력·수상 근거로 사용하고, 아래 사진·그림만 실제 PPT 디자인에 배치합니다.</p></div><span className="photo-total-count">{selectedPdfVisuals.length}개 이미지 포함</span></div>{selectedPdfVisuals.length ? <div className="selected-pdf-assets">{selectedPdfVisuals.map((visual) => <article key={`${visual.pageNumber}-${visual.id}`}><img src={visual.dataUrl} alt={`PDF ${visual.pageNumber}페이지에서 분리한 ${visual.kind === "photo" ? "사진" : "그래픽"}`} /><strong>{visual.pageNumber}페이지 · {visual.kind === "photo" ? "사진" : "그래픽"}</strong><div><button onClick={() => update("representativeImage", visual.dataUrl)}>대표 이미지로 사용</button><span className="pdf-auto-badge">개별 자산 배치</span></div></article>)}</div> : <div className="empty-media">선택한 원문에서 분리할 수 있는 큰 이미지가 없습니다. 원문은 정보 근거로만 사용되며 PPT 화면에는 들어가지 않습니다.</div>}</div>}
     <div className="form-card research-card"><div className="card-heading"><div><h2>무료 외부 기록 검색</h2><p>유료 검색 API 없이 나무위키·OTR·쇼글 검색을 열고, 본인 자료로 확인한 내용만 PPT에 반영합니다.</p></div><span className="free-mode-badge">API 비용 0원</span></div><div className="free-search-links">{researchSearchLinks.map((source) => <a href={source.href} target="_blank" rel="noreferrer" key={source.key}><Search size={14} /> {source.label}에서 검색</a>)}</div><div className="manual-research-form"><label><span>확인한 출처</span><select value={researchSource} onChange={(event) => setResearchSource(event.target.value as FreeResearchSource)}>{freeResearchSources.map((source) => <option value={source.key} key={source.key}>{source.label}</option>)}</select></label><label><span>확인한 원문 링크</span><input type="url" value={researchSourceUrl} onChange={(event) => setResearchSourceUrl(event.target.value)} placeholder="https://..." /></label><label className="wide-field"><span>본인과 일치하는 내용</span><textarea value={researchText} onChange={(event) => setResearchText(event.target.value)} placeholder={"한 줄에 하나씩 입력하세요.\n예: 2024 세종문화회관 단독 공연\n예: 2023 ○○예술대상 수상"} /></label><button onClick={addVerifiedResearch}>확인한 기록을 연혁·PPT에 반영</button></div>{researchNotice && <div className="notice warning">{researchNotice}</div>}<small>검색 결과는 자동으로 가져오지 않으므로 검색 비용이 발생하지 않습니다. 이름·분야·지역·소속·대표사진을 대조한 뒤 본인 원문만 입력해 주세요. 출처 링크는 PPT 근거에 함께 저장됩니다.</small></div>
     <div className="form-card ai-image-fill-card"><div className="card-heading"><div><h2>빈 사진 영역 AI로 채우기</h2><p>대표사진과 확인된 경력·장소를 바탕으로 최대 3장의 보조 이미지를 만듭니다. 실제 공연 사진이 아닌 AI 연출 이미지로 명확히 표시됩니다.</p></div><button disabled={generatingImages || !profile.representativeImage || missingImageCount === 0} onClick={() => void generateMissingImages()}>{generatingImages ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} {missingImageCount ? `${missingImageCount}장 생성` : "기본 사진 충족"}</button></div>{generationNotice && <div className="notice warning">{generationNotice}</div>}<small>실제 업로드 사진 → 사용자가 승인한 웹 사진 → AI 연출 이미지 순으로 PPT에 배치됩니다. AI 이미지는 경력의 시각적 이해를 돕는 용도이며 실제 현장 증빙으로 사용하지 않습니다.</small></div>
-    <div className="form-card"><div className="card-heading"><div><h2>웹 사진 후보 찾기</h2><p>등록 단계에서 올린 사진 1 대표사진을 기준으로 관련 활동 이미지를 검색합니다.</p></div><button disabled={searching || !profile.artistName || !profile.representativeImage} onClick={() => void searchArtistImages()}>{searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />} 웹에서 관련 사진 찾기</button></div>{!profile.representativeImage && <div className="empty-media">프로필 정보 단계의 사진 1 대표사진을 먼저 등록해 주세요.</div>}</div>
+    <div className="form-card"><div className="card-heading"><div><h2>대표 활동 사진 자동 검색</h2><p>키 없이 쓰는 Wikimedia와 연결된 네이버·Google·YouTube에서 실제 후보를 찾고, 동일 인물·화질·권리 검수를 통과한 사진만 최대 2장 선택합니다.</p></div><button disabled={searching || !profile.artistName || !profile.representativeImage} onClick={() => void searchArtistImages(false)}>{searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />} 다시 검색</button></div>{!profile.representativeImage && <div className="empty-media">프로필 정보 단계의 사진 1 대표사진을 먼저 등록해 주세요.</div>}</div>
     {(searchNotice || candidates.length > 0) && <div className="form-card web-image-review"><div className="card-heading"><div><h2>웹 이미지 후보 검토</h2><p>{searchNotice}</p></div><div className="web-review-actions"><span>{candidates.filter((candidate) => candidate.recommended).length}개 추천</span>{candidates.some((candidate) => candidate.recommended && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)) && <button onClick={addRecommendedImages}>안전 추천 자동 추가</button>}</div></div>{candidates.length > 0 && <div className="web-image-grid">{candidates.map((candidate) => { const added = externalImages.some((image) => image.sourceUrl === candidate.sourceUrl); const blocked = candidate.watermarkDetected || candidate.usageStatus === "blocked"; return <article className={candidate.recommended ? "recommended" : blocked ? "blocked" : ""} key={candidate.id}><div className="web-image-frame"><img src={candidate.dataUrl} alt={candidate.title} />{blocked && <span className="watermark-warning">사용 제외</span>}</div><div className="web-image-meta"><span>{candidate.source.toUpperCase()} · 관련도 {Math.round(candidate.relevanceScore * 100)} · 품질 {Math.round(candidate.qualityScore * 100)}</span><strong>{candidate.title}</strong><p>{candidate.reason}</p><div>{candidate.sourceUrl && <a href={candidate.sourceUrl} target="_blank" rel="noreferrer">출처·권한 확인</a>}<button disabled={added || blocked} onClick={() => addExternalImage(candidate)}>{blocked ? "워터마크·권한 위험" : added ? "추가됨" : "PPT 사진으로 추가"}</button></div></div></article>; })}</div>}</div>}
     {externalImages.length > 0 && <div className="form-card web-photo-section"><div className="card-heading"><div><h2>추가한 보조 사진</h2><p>웹 사진은 출처를, AI 이미지는 생성 사실과 근거 경력을 PPT 메모에 남깁니다.</p></div></div><div className="external-image-list">{externalImages.map((image) => <article className={image.source === "ai" ? "generated" : ""} key={image.id}><img src={image.dataUrl} alt={image.title} /><div><strong>{image.title}</strong>{image.source === "ai" ? <><span className="ai-disclosure">AI 연출 이미지</span><small>{image.promptBasis || image.disclosure}</small></> : image.sourceUrl && <a href={image.sourceUrl} target="_blank" rel="noreferrer">{image.source.toUpperCase()} 출처·권한 확인</a>}</div><button aria-label="보조 이미지 삭제" onClick={() => update("externalImages", externalImages.filter((target) => target.id !== image.id))}><X size={14} /></button></article>)}</div></div>}
     <div className="form-card photo-placement-card"><div className="card-heading"><div><h2>PPT 페이지별 사진 배치</h2><p>현재 선택한 사진이 들어갈 위치와 아직 필요한 사진을 미리 확인할 수 있어요.</p></div></div><div className="photo-placement-grid">{photoPlacements.map((placement) => <article key={placement.page}><div><strong>{placement.page}</strong><p>{placement.guide}</p></div><div className={`photo-placement-slots slots-${placement.slots}`}>{Array.from({ length: placement.slots }, (_, index) => placement.assets[index] ? <img src={placement.assets[index].dataUrl} alt={`${placement.page} 배치 사진 ${index + 1}`} key={placement.assets[index].id} /> : <span key={index}>사진 필요</span>)}</div></article>)}</div><small>강점·주요 경력·연락 페이지는 가독성을 위해 사진 없이 텍스트 중심으로 구성합니다.</small></div>
     <div className="form-card"><div className="card-heading"><div><h2>디자인 템플릿</h2><p>활동 분야와 제출 목적에 어울리는 디자인을 골라보세요.</p></div></div><div className="template-grid">{designTemplates.map((item) => <button key={item.key} className={`template-card ${profile.templateKey === item.key ? "selected" : ""}`} onClick={() => update("templateKey", item.key)}><div className="template-art" style={{ background: item.palette.background, color: item.palette.text }}><span style={{ color: item.palette.accent }}>ARTIST</span><strong>PORT<br />FOLIO</strong><i style={{ background: item.palette.accent }} /></div><div><strong>{item.name}</strong><small>{item.description}</small></div>{profile.templateKey === item.key && <span className="template-check"><Check /></span>}</button>)}</div></div>
-    <div className="form-card compact"><div className="form-grid"><label><span>페이지 수</span><select value={profile.pageCount} onChange={(event) => update("pageCount", Number(event.target.value))}><option value={4}>4페이지 · 핵심형</option><option value={6}>6페이지 · 기본형</option><option value={8}>8페이지 · 상세형</option><option value={10}>10페이지 · 포트폴리오형</option></select></label><label><span>프로필 목적</span><select value={profile.purpose} onChange={(event) => update("purpose", event.target.value)}><option>공공기관 제안</option><option>기업 행사 제안</option><option>축제 섭외</option><option>공연장 제출</option></select></label></div></div>
+    <div className="form-card compact"><div className="form-grid"><label><span>페이지 수</span><select value={[5, 6, 8].includes(profile.pageCount) ? profile.pageCount : 6} onChange={(event) => update("pageCount", Number(event.target.value))}><option value={5}>5페이지 · 임팩트형</option><option value={6}>6페이지 · 기본형</option><option value={8}>8페이지 · 상세형</option></select></label><label><span>프로필 목적</span><select value={profile.purpose} onChange={(event) => update("purpose", event.target.value)}><option>공공기관 제안</option><option>기업 행사 제안</option><option>축제 섭외</option><option>공연장 제출</option></select></label></div></div>
   </section>;
 }
 
@@ -819,13 +832,12 @@ function PreviewStep({ profile, template, busy, notice, onEdit, onRetry, onDownl
   const p = template.palette;
   const plans = profile.deckPlan?.slides ?? [];
   const deckFacts = buildDeckFacts(profile);
-  const galleryGuides = ["공연 전경 · 무대 규모가 보이는 가로 사진", "관객 반응 · 현장 분위기가 보이는 사진", "디테일 컷 · 연주·작품·의상 근접 사진"];
   const slides = plans.map((plan, planIndex) => {
     const images = plan.imageRefs.map((id) => getDeckAssetData(profile, id)).filter((value): value is string => Boolean(value));
     const careers = plan.careerIndexes.map((index) => deckFacts[index]).filter(Boolean);
     if (plan.type === "cover") return <div className="ai-preview-slide ai-cover has-image" key={planIndex}>{images[0] ? <img src={images[0]} alt="표지" /> : <div className="ai-photo-placeholder cover"><strong>PHOTO NEEDED</strong><span>{plan.imagePurpose || "얼굴이 선명한 세로 대표사진 · 반신 또는 전신"}</span></div>}<div className="ai-image-shade" /><div className="ai-slide-copy"><span>{plan.eyebrow}</span><h1>{plan.title}</h1><p>{plan.body}</p><small>{profile.primaryField} · {profile.region}</small></div></div>;
     if (plan.type === "gallery") {
-      return <div className="ai-preview-slide ai-gallery" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{plan.body && <p>{plan.body}</p>}<div className="ai-gallery-grid count-3">{galleryGuides.map((guide, index) => images[index] ? <img src={images[index]} alt={`개별 활동 이미지 ${index + 1}`} key={guide} /> : <div className="ai-photo-placeholder" key={guide}><strong>PHOTO NEEDED</strong><span>{guide}</span></div>)}</div></div>;
+      return <div className="ai-preview-slide ai-gallery single" key={planIndex}><div className="ai-gallery-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{plan.body && <p>{plan.body}</p>}</div>{images[0] ? <img src={images[0]} alt="대표 활동 장면" /> : <div className="ai-photo-placeholder"><strong>ONE STRONG IMAGE</strong><span>{plan.imagePurpose || "대표 활동을 한눈에 보여주는 사진 한 장"}</span></div>}</div>;
     }
     if (plan.type === "strengths") return <div className="ai-preview-slide ai-strengths" key={planIndex}><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div>{plan.bullets.slice(0, 3).map((item, index) => <article key={index}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>;
     if (plan.type === "career") {

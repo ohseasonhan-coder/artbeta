@@ -8,7 +8,7 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-type Source = "naver" | "google" | "youtube";
+type Source = "naver" | "google" | "youtube" | "wikimedia";
 
 interface Candidate {
   id: string;
@@ -19,6 +19,7 @@ interface Candidate {
   width: number;
   height: number;
   dataUrl?: string;
+  license?: string;
 }
 
 const matchSchema = z.object({
@@ -117,6 +118,37 @@ async function searchYoutube(query: string, queryIndex: number): Promise<Candida
   }).filter((item) => item.imageUrl);
 }
 
+async function searchWikimedia(query: string, queryIndex: number, field: string): Promise<Candidate[]> {
+  const artistName = query.match(/"([^"]+)"/)?.[1] || query.replace(/https?:\/\/\S+/g, "").trim().split(/\s+/).slice(0, 2).join(" ");
+  const focusedQuery = [artistName, field, "artist performance"].filter(Boolean).join(" ");
+  const url = new URL("https://commons.wikimedia.org/w/api.php");
+  url.searchParams.set("action", "query"); url.searchParams.set("format", "json"); url.searchParams.set("origin", "*");
+  url.searchParams.set("generator", "search"); url.searchParams.set("gsrsearch", focusedQuery); url.searchParams.set("gsrnamespace", "6"); url.searchParams.set("gsrlimit", "8");
+  url.searchParams.set("prop", "imageinfo"); url.searchParams.set("iiprop", "url|size|mime|extmetadata"); url.searchParams.set("iiurlwidth", "1200");
+  const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) return [];
+  const data = await response.json() as { query?: { pages?: Record<string, { title?: string; imageinfo?: Array<{ url?: string; thumburl?: string; descriptionurl?: string; width?: number; height?: number; mime?: string; extmetadata?: { LicenseShortName?: { value?: string } } }> }> } };
+  return Object.values(data.query?.pages ?? {}).map((page, index) => {
+    const image = page.imageinfo?.[0];
+    return { id: `wikimedia-${queryIndex}-${index}`, source: "wikimedia" as const, imageUrl: image?.thumburl || image?.url || "", sourceUrl: image?.descriptionurl || "https://commons.wikimedia.org", title: (page.title || "Wikimedia Commons").replace(/^File:/, ""), width: image?.width || 0, height: image?.height || 0, license: image?.extmetadata?.LicenseShortName?.value || "" };
+  }).filter((item) => item.imageUrl && !/\.svg$/i.test(item.imageUrl));
+}
+
+async function searchWikipediaLead(query: string, queryIndex: number): Promise<Candidate[]> {
+  const artistName = query.match(/"([^"]+)"/)?.[1] || query.trim().split(/\s+/).slice(0, 2).join(" ");
+  const languages = ["ko", "en"];
+  const results = await Promise.all(languages.map(async (language) => {
+    const url = new URL(`https://${language}.wikipedia.org/w/api.php`);
+    url.searchParams.set("action", "query"); url.searchParams.set("format", "json"); url.searchParams.set("origin", "*");
+    url.searchParams.set("generator", "search"); url.searchParams.set("gsrsearch", artistName); url.searchParams.set("gsrlimit", "4");
+    url.searchParams.set("prop", "pageimages|info"); url.searchParams.set("piprop", "thumbnail|original"); url.searchParams.set("pithumbsize", "1200"); url.searchParams.set("inprop", "url");
+    const response = await fetch(url, { signal: AbortSignal.timeout(8_000) }); if (!response.ok) return [];
+    const data = await response.json() as { query?: { pages?: Record<string, { title?: string; fullurl?: string; thumbnail?: { source?: string; width?: number; height?: number }; original?: { source?: string; width?: number; height?: number } }> } };
+    return Object.values(data.query?.pages ?? {}).map((page, index) => ({ id: `wikipedia-${language}-${queryIndex}-${index}`, source: "wikimedia" as const, imageUrl: page.thumbnail?.source || page.original?.source || "", sourceUrl: page.fullurl || `https://${language}.wikipedia.org`, title: `${page.title || artistName} · Wikipedia ${language.toUpperCase()}`, width: page.original?.width || page.thumbnail?.width || 0, height: page.original?.height || page.thumbnail?.height || 0, license: "Wikipedia/Wikimedia 원문 라이선스 확인" })).filter((item) => item.imageUrl);
+  }));
+  return results.flat();
+}
+
 async function downloadImage(candidate: Candidate): Promise<Candidate | null> {
   try {
     const url = new URL(candidate.imageUrl);
@@ -157,16 +189,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "아티스트명과 대표사진이 필요합니다." }, { status: 400 });
     }
     const configuredSources = [
+      "wikimedia",
       process.env.NAVER_CLIENT_ID && process.env.NAVER_CLIENT_SECRET ? "naver" : "",
       process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_ENGINE_ID ? "google" : "",
       process.env.YOUTUBE_API_KEY ? "youtube" : "",
     ].filter(Boolean);
-    if (!configuredSources.length) {
-      return NextResponse.json({ error: "웹 이미지 검색 API가 설정되지 않았습니다.", code: "SEARCH_NOT_CONFIGURED" }, { status: 503 });
-    }
-
     const queries = buildQueries(artistName, body.primaryField || "", body.region || "", body.affiliation || "", body.identityHint || "", body.activeSince || "", body.officialUrl || "", body.careers ?? []);
-    const searched = await Promise.allSettled(queries.flatMap((query, queryIndex) => [searchNaver(query, queryIndex), searchGoogle(query, queryIndex), searchYoutube(query, queryIndex)]));
+    const searched = await Promise.allSettled(queries.flatMap((query, queryIndex) => [searchWikipediaLead(query, queryIndex), searchWikimedia(query, queryIndex, body.primaryField || ""), searchNaver(query, queryIndex), searchGoogle(query, queryIndex), searchYoutube(query, queryIndex)]));
     const unique = new Map<string, Candidate>();
     searched.forEach((result) => {
       if (result.status === "fulfilled") result.value.forEach((candidate) => { if (!unique.has(candidate.imageUrl)) unique.set(candidate.imageUrl, candidate); });
@@ -183,7 +212,7 @@ export async function POST(request: Request) {
       if (reference) parts.push({ text: "사용자 등록 참고 사진" }, { inlineData: { mimeType: reference[1], data: reference[2] } });
       downloaded.forEach((candidate) => {
         const match = candidate.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
-        parts.push({ text: `후보 ID=${candidate.id}, 출처=${candidate.source}, 제목=${candidate.title}, 원본크기=${candidate.width}x${candidate.height}` });
+        parts.push({ text: `후보 ID=${candidate.id}, 출처=${candidate.source}, 제목=${candidate.title}, 원본크기=${candidate.width}x${candidate.height}${candidate.license ? `, 라이선스=${candidate.license}` : ""}` });
         if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
       });
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -202,7 +231,7 @@ export async function POST(request: Request) {
     const candidates = downloaded.map((candidate) => {
       const fallbackQuality = candidate.width >= 800 || candidate.height >= 800 ? 0.78 : 0.58;
       const fallbackRelevance = candidate.title.toLowerCase().includes(artistName.toLowerCase()) ? 0.76 : 0.55;
-      const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, identityScore: 0, identityConflicts: [], watermarkDetected: false, rightsRisk: "unknown" as const, reason: "검색 문맥만 확인됨 · 동일 인물과 사용 권한을 직접 확인해야 합니다." };
+      const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, identityScore: 0, identityConflicts: [], watermarkDetected: false, rightsRisk: candidate.source === "wikimedia" && candidate.license ? "low" as const : "unknown" as const, reason: candidate.license ? `Wikimedia Commons ${candidate.license} · 동일 인물 여부를 직접 확인해야 합니다.` : "검색 문맥만 확인됨 · 동일 인물과 사용 권한을 직접 확인해야 합니다." };
       const usageStatus = score.watermarkDetected || score.rightsRisk === "high" ? "blocked" : score.recommended && score.rightsRisk === "low" ? "approved" : "review";
       return { ...candidate, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, identityScore: score.identityScore, identityConflicts: score.identityConflicts, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved" && score.identityScore >= 0.7 && !score.identityConflicts.length && score.relevanceScore >= 0.72 && score.qualityScore >= 0.65, reason: score.reason };
     }).sort((a, b) => Number(b.recommended) - Number(a.recommended) || (b.relevanceScore + b.qualityScore) - (a.relevanceScore + a.qualityScore));

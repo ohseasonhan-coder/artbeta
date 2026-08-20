@@ -61,7 +61,7 @@ export interface PdfExtractedVisual {
 export interface ExternalImageAsset {
   id: string;
   dataUrl: string;
-  source: "naver" | "google" | "youtube" | "ai";
+  source: "naver" | "google" | "youtube" | "wikimedia" | "ai";
   sourceUrl?: string;
   title: string;
   relevanceScore: number;
