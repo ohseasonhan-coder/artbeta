@@ -71,6 +71,15 @@ interface AiStatus {
   model: string;
 }
 
+interface ProfileLinkResponse {
+  url: string;
+  title: string;
+  text: string;
+  sourceName: string;
+  verificationTier: "primary" | "platform" | "reference";
+  error?: string;
+}
+
 interface WebImageCandidate extends ExternalImageAsset {
   imageUrl: string;
   width: number;
@@ -444,6 +453,142 @@ export default function ProfileStudio() {
     }
   };
 
+  const analyzeQuickLink = async (rawLink: string) => {
+    const candidate = rawLink.trim();
+    if (!candidate) return;
+    const link = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+    if (isYouTubeVideoUrl(link)) {
+      setProfile((current) => ({ ...current, source: current.source || "questionnaire", videoUrl: normalizeVideoUrl(link) }));
+      setNotice("YouTube 대표 영상 링크를 저장했어요. PPT에 재생 버튼과 바로가기로 반영합니다.");
+      return;
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(link);
+    } catch {
+      setNotice("https://로 시작하는 올바른 외부 링크를 입력해 주세요.");
+      return;
+    }
+
+    update("officialUrl", parsed.toString());
+    setBusy(true);
+    setNotice("외부 페이지에서 소개·경력·공연·수상 정보를 읽고 있어요.");
+    try {
+      const pageResponse = await fetch("/api/profile-link/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: parsed.toString() }),
+      });
+      const page = await pageResponse.json() as ProfileLinkResponse;
+      if (!pageResponse.ok) throw new Error(page.error || "외부 페이지를 읽지 못했습니다.");
+
+      const ambiguousPage = page.verificationTier === "reference" && /(?:분류\s*)?동음이의어|동명이인/.test(page.text.slice(0, 8_000));
+      const sourceLinkItem: ExtractedItem = {
+        id: `social_link-${crypto.randomUUID()}`,
+        type: "social_link",
+        label: `${page.sourceName} 원문`,
+        value: page.url,
+        confidence: 1,
+        status: "approved",
+        sourceName: page.sourceName,
+        sourceUrl: page.url,
+        verificationTier: page.verificationTier,
+      };
+      let finalItems: ExtractedItem[] = ambiguousPage ? [sourceLinkItem] : [
+        sourceLinkItem,
+        ...inferItemsFromText(page.text)
+          .filter((item) => ["career", "performance", "award", "media", "contact"].includes(item.type))
+          .map((item) => ({
+            ...item,
+            confidence: Math.min(item.confidence, 0.65),
+            status: "needs_review" as const,
+            sourceName: page.sourceName,
+            sourceUrl: page.url,
+            verificationTier: page.verificationTier,
+          })),
+      ];
+      let aiProfile: AiExtractionResponse["profile"] | undefined;
+      let provider = ambiguousPage ? "링크 저장" : "기본 분석";
+      if (!ambiguousPage) try {
+        const aiResponse = await fetch("/api/ai/extract-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: [
+              `[분석 대상 활동명: ${profile.artistName || "미입력"}]`,
+              `[활동 분야: ${profile.primaryField || "미입력"}]`,
+              `[소속·지역·식별 단서: ${[profile.affiliation, profile.region, profile.identityHint].filter(Boolean).join(" · ") || "미입력"}]`,
+              "동명이인 목록, 광고, 사이트 메뉴는 제외하고 위 대상과 일치하는 내용만 추출하세요.",
+              `[출처: ${page.sourceName}]`,
+              `[원문: ${page.url}]`,
+              page.text,
+            ].join("\n"),
+          }),
+        });
+        const aiResult = await aiResponse.json() as Partial<AiExtractionResponse>;
+        if (aiResponse.ok && aiResult.items && aiResult.profile) {
+          aiProfile = aiResult.profile;
+          const sourcedAiItems = aiResult.items.map((item) => ({ ...item, sourceName: page.sourceName, sourceUrl: page.url, verificationTier: page.verificationTier }));
+          finalItems = mergeExtractedItems(sourcedAiItems, finalItems);
+          provider = aiResult.provider === "gemini" ? "Gemini" : "OpenAI";
+        }
+      } catch {
+        // AI 무료 한도가 소진되어도 원문 규칙 기반 결과는 반영합니다.
+      }
+
+      const sourcedCareers = (aiProfile?.facts?.length
+        ? aiProfile.facts.map((fact) => ({
+            id: crypto.randomUUID(),
+            year: fact.date,
+            title: fact.title || fact.description,
+            organization: [fact.organization, fact.location].filter(Boolean).join(" · "),
+          }))
+        : itemsToCareers(finalItems))
+        .filter((career) => career.title.trim())
+        .map((career) => ({ ...career, sourceName: page.sourceName, sourceUrl: page.url, verificationTier: page.verificationTier }));
+
+      setProfile((current) => {
+        const careerKeys = new Set(current.careers.filter((career) => career.title.trim()).map((career) => `${career.year}:${career.title.replace(/\s+/g, " ").toLowerCase()}`));
+        const newCareers = sourcedCareers.filter((career) => {
+          const key = `${career.year}:${career.title.replace(/\s+/g, " ").toLowerCase()}`;
+          if (careerKeys.has(key)) return false;
+          careerKeys.add(key);
+          return true;
+        });
+        const existingCareers = current.careers.filter((career) => career.title.trim());
+        const firstCareer = newCareers[0] || existingCareers[0];
+        return {
+          ...current,
+          source: current.source || "questionnaire",
+          artistName: current.artistName || aiProfile?.artistName || "",
+          artistType: aiProfile?.artistType && aiProfile.artistType !== "알 수 없음" ? aiProfile.artistType : current.artistType,
+          primaryField: current.primaryField || (aiProfile?.primaryField ? normalizeField(aiProfile.primaryField) : ""),
+          secondaryField: current.secondaryField || aiProfile?.secondaryFields.join(", ") || "",
+          region: current.region || aiProfile?.region || "",
+          members: current.members || aiProfile?.members.join(", ") || "",
+          contact: current.contact || aiProfile?.contacts.join(" · ") || "",
+          officialUrl: page.url,
+          videoUrl: aiProfile?.socialLinks.find((url) => isYouTubeVideoUrl(url)) || current.videoUrl,
+          introduction: current.introduction || aiProfile?.introduction || "",
+          tagline: current.tagline || aiProfile?.tagline || "",
+          generatedStrengths: current.generatedStrengths.length ? current.generatedStrengths : aiProfile?.strengths || [],
+          identityHint: current.identityHint || (firstCareer ? [firstCareer.year, firstCareer.title, firstCareer.organization].filter(Boolean).join(" · ") : page.title),
+          careers: [...existingCareers, ...newCareers].length ? [...existingCareers, ...newCareers] : current.careers,
+          extractedItems: mergeExtractedItems(current.extractedItems, finalItems),
+        };
+      });
+      setNotice(ambiguousPage
+        ? `${page.sourceName} 동음이의어 페이지로 확인되어 다른 사람의 기록은 반영하지 않고 원문 링크만 저장했어요. 본인 전용 문서 링크를 붙여넣으면 자동 분석됩니다.`
+        : `${provider}가 ${page.sourceName} 원문을 분석해 경력·수상·공연 ${sourcedCareers.length}건과 프로필 정보 ${finalItems.length}건을 반영했어요.`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "원문을 자동으로 읽지 못했습니다.";
+      setNotice(`링크는 저장했어요. ${reason} 세부 내용은 다음 화면에서 직접 보완할 수 있습니다.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const generateCopy = async () => {
     setBusy(true); setNotice("");
     try {
@@ -519,14 +664,14 @@ export default function ProfileStudio() {
         </div>
       )}
 
-      {step === 0 && <QuickStartStep profile={profile} update={update} progress={pdfProgress} fileName={pdfName} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadQuickMaterials} onSkip={() => { update("source", "questionnaire"); setStep(1); }} />}
+      {step === 0 && <QuickStartStep profile={profile} update={update} progress={pdfProgress} fileName={pdfName} busy={busy} notice={notice} aiStatus={aiStatus} onUpload={uploadQuickMaterials} onAnalyzeLink={analyzeQuickLink} onSkip={() => { update("source", "questionnaire"); setStep(1); }} />}
       {step === 1 && <QuickReviewStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} busy={busy} notice={notice} generate={generateCopy} onBuild={prepareDeck} />}
       {step === 2 && <PreviewStep profile={profile} template={template} busy={busy} notice={notice} onEdit={() => setStep(1)} onRetry={prepareDeck} onDownload={exportDeck} />}
     </main>
   );
 }
 
-function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiStatus, onUpload, onSkip }: {
+function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiStatus, onUpload, onAnalyzeLink, onSkip }: {
   profile: ProfileData;
   update: <K extends keyof ProfileData>(key: K, value: ProfileData[K]) => void;
   progress: number;
@@ -535,6 +680,7 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
   notice: string;
   aiStatus: AiStatus;
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onAnalyzeLink: (link: string) => Promise<void>;
   onSkip: () => void;
 }) {
   const { config } = useSiteSettings();
@@ -542,13 +688,12 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
   const saveLink = () => {
     const link = linkValue.trim();
     if (!link) return;
-    if (isYouTubeVideoUrl(link)) update("videoUrl", normalizeVideoUrl(link));
-    else update("officialUrl", link);
+    void onAnalyzeLink(link);
   };
   const sectionContent: Record<string, React.ReactNode> = {
     identity: <div className="quick-identity-row" key="identity"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>,
     upload: <label className={`unified-dropzone ${busy ? "busy" : ""}`} key="upload"><input type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : config.home.uploadTitle}</strong><small>{config.home.uploadDescription}<br />PDF·PPTX 안의 사진과 문구도 AI가 자동 선별합니다.</small></label>,
-    link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 붙여넣기 <small>선택</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onBlur={saveLink} placeholder="홈페이지·Instagram·YouTube 링크" /></label><button onClick={saveLink}>링크 저장</button></div>,
+    link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 붙여넣기 <small>외부 프로필도 자동 분석</small></span><input value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveLink(); }} placeholder="홈페이지·Instagram·YouTube·나무위키·OTR·쇼글 링크" /></label><button disabled={busy || !linkValue.trim()} onClick={saveLink}>{busy ? "분석 중" : "링크 분석"}</button></div>,
     aiStatus: <div className="quick-ai-state" key="aiStatus"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>,
   };
   return <section className="hero quick-start-page">
@@ -557,10 +702,10 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
     <p>{config.home.description}</p>
     <div className="quick-start-card">
       {config.home.sections.filter((section) => section.enabled && section.key !== "trust").map((section) => sectionContent[section.key])}
-      {(busy || progress > 0) && <div className="quick-analysis-progress"><div><span style={{ width: `${progress}%` }} /></div><strong>{fileName || "업로드한 자료"} · {progress}%</strong></div>}
+      {progress > 0 && <div className="quick-analysis-progress"><div><span style={{ width: `${progress}%` }} /></div><strong>{fileName || "업로드한 자료"} · {progress}%</strong></div>}
       {notice && <div className="notice warning">{notice}</div>}
     </div>
-    <button className="text-start-button" onClick={onSkip}>{config.home.noMaterialLabel} <ArrowRight size={15} /></button>
+    <button className="text-start-button" onClick={onSkip}>{profile.officialUrl || profile.videoUrl ? "입력한 링크로 계속하기" : config.home.noMaterialLabel} <ArrowRight size={15} /></button>
     {config.home.sections.find((section) => section.key === "trust")?.enabled && <div className="trust-row">{config.home.trustItems.map((item) => <span key={item}><CheckCircle2 /> {item}</span>)}</div>}
   </section>;
 }
