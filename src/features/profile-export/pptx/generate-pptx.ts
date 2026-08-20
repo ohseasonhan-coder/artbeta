@@ -203,6 +203,37 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   return { narrative: "정체성, 현장 이미지, 검증된 경력, 섭외 문의 순서로 빠르게 설득", visualDirection: "짧은 문구와 실제 공연 이미지 중심", slides: paginateSlideCopy([...slides, contact]).map(fitSlideCopy) };
 }
 
+function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: ProfileData): DeckPlan {
+  if (!assets.length) return { ...plan, slides: plan.slides.map((slide) => ({ ...slide, imageRefs: [] })) };
+  let slides: DeckSlidePlan[] = plan.slides.map((slide) => ({ ...slide, bullets: [...slide.bullets], careerIndexes: [...slide.careerIndexes], imageRefs: [] }));
+  const coverIndex = slides.findIndex((slide) => slide.type === "cover");
+  if (coverIndex < 0) slides.unshift({ type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: [], imagePurpose: "대표사진", careerIndexes: [], layout: "split_right" });
+  const normalizedCoverIndex = slides.findIndex((slide) => slide.type === "cover");
+  slides[normalizedCoverIndex].imageRefs = [assets[0].id];
+
+  if (assets[1]) {
+    let aboutIndex = slides.findIndex((slide) => slide.type === "about");
+    if (aboutIndex < 0) {
+      slides.splice(normalizedCoverIndex + 1, 0, { type: "about", eyebrow: "ARTIST IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: profile.introduction, bullets: [profile.primaryField, profile.region].filter(Boolean).slice(0, 2), imageRefs: [], imagePurpose: "대표 활동사진", careerIndexes: [], layout: "split_right" });
+      aboutIndex = normalizedCoverIndex + 1;
+    }
+    slides[aboutIndex].imageRefs = [assets[1].id];
+  }
+
+  const requiredGalleryAssets = assets.slice(2, 4);
+  let galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
+  while (galleryIndexes.length < requiredGalleryAssets.length) {
+    const insertAt = slides.findIndex((slide) => slide.type === "career" || slide.type === "contact");
+    slides.splice(insertAt >= 0 ? insertAt : slides.length, 0, { type: "gallery", eyebrow: "SIGNATURE MOMENT", title: galleryIndexes.length ? "또 하나의 대표 장면" : "이 무대를 기억하게 만드는 순간", body: "", bullets: [], imageRefs: [], imagePurpose: "대표 활동을 보여주는 강한 사진 한 장", careerIndexes: [], layout: "gallery" });
+    galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
+  }
+  const allowedGalleryIndexes = new Set(galleryIndexes.slice(0, requiredGalleryAssets.length));
+  slides = slides.filter((slide, index) => slide.type !== "gallery" || allowedGalleryIndexes.has(index));
+  galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
+  galleryIndexes.forEach((slideIndex, index) => { slides[slideIndex].imageRefs = requiredGalleryAssets[index] ? [requiredGalleryAssets[index].id] : []; });
+  return { ...plan, slides };
+}
+
 async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
   const planningAssets = assets.slice(0, 24);
   const thumbnails = await Promise.all(planningAssets.map(async (asset) => ({ ...asset, dataUrl: await makeImageThumbnail(asset.dataUrl, 640) })));
@@ -246,7 +277,8 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
   const assets = selectPortfolioAssets(collectDeckAssets(profile));
   try {
     const result = await requestDeckPlan(profile, assets);
-    return { plan: { ...result.plan, slides: paginateSlideCopy(result.plan.slides).map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
+    const coveredPlan = ensureVisualCoverage(result.plan, assets, profile);
+    return { plan: { ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) }, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: result.qualityScore, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount } };
   } catch (error) {
     const failure = error as Error & { code?: string };
     return {
@@ -271,7 +303,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const prepared = profile.deckPlan && profile.deckPlanMeta
     ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
     : await prepareDeckPlan(profile);
-  const plan = { ...prepared.plan, slides: paginateSlideCopy(prepared.plan.slides).map(fitSlideCopy) };
+  const coveredPlan = ensureVisualCoverage(prepared.plan, assets, profile);
+  const plan = { ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) };
   const exportMeta = prepared.meta;
   const deckFacts = buildDeckFacts(profile);
 

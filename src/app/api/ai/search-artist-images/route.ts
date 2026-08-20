@@ -131,7 +131,7 @@ async function searchWikimedia(query: string, queryIndex: number, field: string)
   return Object.values(data.query?.pages ?? {}).map((page, index) => {
     const image = page.imageinfo?.[0];
     return { id: `wikimedia-${queryIndex}-${index}`, source: "wikimedia" as const, imageUrl: image?.thumburl || image?.url || "", sourceUrl: image?.descriptionurl || "https://commons.wikimedia.org", title: (page.title || "Wikimedia Commons").replace(/^File:/, ""), width: image?.width || 0, height: image?.height || 0, license: image?.extmetadata?.LicenseShortName?.value || "" };
-  }).filter((item) => item.imageUrl && !/\.svg$/i.test(item.imageUrl));
+  }).filter((item) => item.imageUrl && /\.(?:jpe?g|png|webp)(?:\?|$)/i.test(item.imageUrl));
 }
 
 async function searchWikipediaLead(query: string, queryIndex: number): Promise<Candidate[]> {
@@ -228,13 +228,24 @@ export async function POST(request: Request) {
       }
     }
 
+    const identityTerms = [artistName, body.affiliation, body.identityHint]
+      .flatMap((value) => (value || "").toLowerCase().split(/[\s·|,/()[\]-]+/))
+      .map((value) => value.replace(/[^0-9a-z가-힣]/g, ""))
+      .filter((value) => value.length >= 2);
     const candidates = downloaded.map((candidate) => {
       const fallbackQuality = candidate.width >= 800 || candidate.height >= 800 ? 0.78 : 0.58;
-      const fallbackRelevance = candidate.title.toLowerCase().includes(artistName.toLowerCase()) ? 0.76 : 0.55;
+      const searchableTitle = candidate.title.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+      const titleIdentityMatch = identityTerms.some((term) => searchableTitle.includes(term));
+      const fallbackRelevance = titleIdentityMatch ? 0.76 : 0.35;
       const score = scores.get(candidate.id) || { relevanceScore: fallbackRelevance, qualityScore: fallbackQuality, recommended: false, identityScore: 0, identityConflicts: [], watermarkDetected: false, rightsRisk: candidate.source === "wikimedia" && candidate.license ? "low" as const : "unknown" as const, reason: candidate.license ? `Wikimedia Commons ${candidate.license} · 동일 인물 여부를 직접 확인해야 합니다.` : "검색 문맥만 확인됨 · 동일 인물과 사용 권한을 직접 확인해야 합니다." };
-      const usageStatus = score.watermarkDetected || score.rightsRisk === "high" ? "blocked" : score.recommended && score.rightsRisk === "low" ? "approved" : "review";
-      return { ...candidate, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, identityScore: score.identityScore, identityConflicts: score.identityConflicts, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved" && score.identityScore >= 0.7 && !score.identityConflicts.length && score.relevanceScore >= 0.72 && score.qualityScore >= 0.65, reason: score.reason };
-    }).sort((a, b) => Number(b.recommended) - Number(a.recommended) || (b.relevanceScore + b.qualityScore) - (a.relevanceScore + a.qualityScore));
+      const identityApproved = score.identityScore >= 0.78 && !score.identityConflicts.length && score.relevanceScore >= 0.78;
+      const usageStatus = score.watermarkDetected || score.rightsRisk === "high" ? "blocked" : score.recommended && score.rightsRisk === "low" && identityApproved && score.qualityScore >= 0.65 ? "approved" : "review";
+      return { ...candidate, titleIdentityMatch, relevanceScore: score.relevanceScore, qualityScore: score.qualityScore, identityScore: score.identityScore, identityConflicts: score.identityConflicts, watermarkDetected: score.watermarkDetected, rightsRisk: score.rightsRisk, usageStatus, recommended: usageStatus === "approved", reason: score.reason };
+    }).filter((candidate) => scores.has(candidate.id)
+      ? candidate.identityScore >= 0.62 && candidate.relevanceScore >= 0.65 && !candidate.identityConflicts.length
+      : candidate.titleIdentityMatch)
+      .sort((a, b) => Number(b.recommended) - Number(a.recommended) || b.identityScore - a.identityScore || (b.relevanceScore + b.qualityScore) - (a.relevanceScore + a.qualityScore))
+      .slice(0, 8);
 
     return NextResponse.json({ query: queries.join(" | "), configuredSources, candidates });
   } catch (error) {
