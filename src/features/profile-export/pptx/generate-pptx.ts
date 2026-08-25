@@ -41,6 +41,8 @@ interface VisualAsset {
   sourceTitle?: string;
   origin: "representative" | "upload" | "web" | "pdf" | "ai";
   qualityScore?: number;
+  pixelWidth?: number;
+  pixelHeight?: number;
 }
 
 export interface DeckExportResult {
@@ -59,13 +61,20 @@ export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
     .forEach((dataUrl, index) => { if (dataUrl) { const category = profile.performanceImageCategories[index]; assets.push({ id: `performance-${index + 1}`, kind: "performance", origin: "upload", visualRole: category === "poster" ? "poster" : category === "history" ? "history" : "stage", visualType: category === "poster" || category === "history" ? "graphic" : "photo", dataUrl }); } });
   (profile.externalImages ?? []).filter((asset) => asset.source !== "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "performance", origin: "web", visualRole: asset.visualRole, visualType: asset.visualRole === "poster" || asset.visualRole === "history" ? "graphic" : "photo", qualityScore: (asset.relevanceScore + asset.qualityScore + (asset.visualMatchScore ?? asset.relevanceScore)) / 3, dataUrl: asset.dataUrl, sourceUrl: asset.sourceUrl, sourceTitle: `${asset.source.toUpperCase()} · 동일 인물 일치 ${Math.round((asset.visualMatchScore ?? 0) * 100)} · ${asset.title}` }));
   (profile.externalImages ?? []).filter((asset) => asset.source === "ai" && asset.usageStatus === "approved").forEach((asset) => assets.push({ id: `external-${asset.id}`, kind: "generated", origin: "ai", qualityScore: asset.qualityScore, dataUrl: asset.dataUrl, sourceTitle: `AI 연출 이미지 · ${asset.title}${asset.promptBasis ? ` · 근거: ${asset.promptBasis}` : ""}` }));
-  profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => page.extractedVisuals?.filter((visual) => visual.selected && visual.role !== "exclude" && (visual.qualityScore ?? 0.7) >= 0.55).forEach((visual) => assets.push({
+  profile.pdfPageAssets.filter((page) => page.selected).forEach((page) => page.extractedVisuals?.filter((visual) => {
+    if (!visual.selected || visual.role === "exclude" || (visual.relevanceScore ?? 0.7) < 0.68 || (visual.qualityScore ?? 0.7) < 0.68) return false;
+    const shortEdge = Math.min(visual.width, visual.height);
+    const longEdge = Math.max(visual.width, visual.height);
+    return visual.kind === "photo" ? shortEdge >= 360 && longEdge >= 720 : shortEdge >= 500 && longEdge >= 700;
+  }).forEach((visual) => assets.push({
     id: `pdf-visual-${page.pageNumber}-${visual.id}`,
     kind: "pdf_visual",
     origin: "pdf",
     visualType: visual.kind,
     visualRole: visual.role,
     qualityScore: ((visual.relevanceScore ?? 0.7) + (visual.qualityScore ?? 0.7)) / 2,
+    pixelWidth: visual.width,
+    pixelHeight: visual.height,
     pageNumber: page.pageNumber,
     dataUrl: visual.dataUrl,
     sourceTitle: `사용자 제공 PDF ${page.pageNumber}페이지 · ${visual.role === "portrait" ? "인물·대표사진" : visual.role === "stage" ? "무대·활동사진" : visual.role === "poster" ? "포스터·홍보물" : visual.role === "history" ? "연혁·수상자료" : visual.kind === "photo" ? "사진" : "그래픽"}`,
@@ -84,10 +93,10 @@ function visualAssetKey(asset: VisualAsset) {
 export function selectPortfolioAssets(assets: VisualAsset[], limit = 8) {
   const uniqueAssets = assets.filter((asset, index, list) => asset.visualRole !== "exclude" && list.findIndex((candidate) => visualAssetKey(candidate) === visualAssetKey(asset)) === index);
   const representative = uniqueAssets.find((asset) => asset.kind === "representative") || uniqueAssets.find((asset) => asset.visualRole === "portrait");
-  const originScore = { upload: 92, web: 78, pdf: 96, ai: 55, representative: 100 } as const;
+  const originScore = { upload: 96, web: 92, pdf: 70, ai: 52, representative: 100 } as const;
   const candidates = uniqueAssets.filter((asset) => asset !== representative).sort((a, b) => {
     const roleScore: Partial<Record<ProfileVisualRole, number>> = { portrait: 8, stage: 7, poster: 4, history: 3, other: 0, exclude: -100 };
-    const score = (asset: VisualAsset) => originScore[asset.origin] + (asset.qualityScore ?? 0.7) * 12 + (asset.visualType === "photo" ? 3 : 0) + (roleScore[asset.visualRole || "other"] ?? 0);
+    const score = (asset: VisualAsset) => originScore[asset.origin] + (asset.qualityScore ?? 0.7) * 28 + (asset.visualType === "photo" ? 4 : 0) + (roleScore[asset.visualRole || "other"] ?? 0);
     return score(b) - score(a);
   });
   const selected = representative ? [representative] : [];
@@ -184,7 +193,11 @@ function enforceDeckSafety(plan: DeckPlan): DeckPlan {
 
 function normalizeNarrativeStructure(plan: DeckPlan, profile: ProfileData): DeckPlan {
   const first = plan.slides.find((slide) => slide.type === "cover");
-  const last = [...plan.slides].reverse().find((slide) => slide.type === "contact");
+  const lastCandidate = [...plan.slides].reverse().find((slide) => slide.type === "contact");
+  const last = lastCandidate ? {
+    ...lastCandidate,
+    title: /문의|일정|출연|조건/.test(lastCandidate.title) ? lastCandidate.title : "가능 일정과 출연 조건을 확인해 보세요",
+  } : undefined;
   const about = plan.slides.find((slide) => slide.type === "about" && (slide.title.trim() || slide.body.trim()));
   const strengths = plan.slides.find((slide) => slide.type === "strengths");
   const galleries = plan.slides.filter((slide) => slide.type === "gallery" && slide.imageRefs.length && (slide.title.trim() || slide.careerIndexes.length)).slice(0, profile.pageCount >= 8 ? 2 : 1);
@@ -215,11 +228,13 @@ function auditDeckQuality(plan: DeckPlan, profile: ProfileData, assets: VisualAs
     { id: "text", label: "텍스트 안전 영역", passed: plan.slides.every((slide) => { const budget = budgets[slide.type]; return slide.title.replace(/\n/g, " ").length <= budget[0] && (!budget[1] || slide.body.replace(/\n/g, " ").length <= budget[1]) && slide.bullets.length <= budget[2] && slide.bullets.every((item) => item.replace(/\n/g, " ").length <= budget[3]); }), detail: "제목·본문·목록의 절대 글자 수 제한" },
     { id: "word_wrap", label: "단어 단위 줄바꿈", passed: plan.slides.every((slide) => !/[가-힣A-Za-z0-9]-\n[가-힣A-Za-z0-9]/.test(`${slide.title}\n${slide.body}\n${slide.bullets.join("\n")}`)), detail: "단어 중간 분리와 강제 하이픈 줄바꿈 금지" },
     { id: "images", label: "이미지 중복 방지", passed: new Set(imageIds).size === imageIds.length, detail: "동일 자산은 전체 PPT에서 한 번만 사용" },
+    { id: "image_quality", label: "문서 이미지 품질", passed: imageIds.every((id) => { const asset = assetMap.get(id); if (!asset || asset.origin !== "pdf") return true; const shortEdge = Math.min(asset.pixelWidth ?? 0, asset.pixelHeight ?? 0); const longEdge = Math.max(asset.pixelWidth ?? 0, asset.pixelHeight ?? 0); return (asset.qualityScore ?? 0) >= 0.68 && (asset.visualType === "photo" ? shortEdge >= 360 && longEdge >= 720 : shortEdge >= 500 && longEdge >= 700); }), detail: "저해상도·저신뢰 PDF 잘라낸 이미지는 최종 PPT에서 제외" },
     { id: "image_role", label: "페이지-이미지 역할 일치", passed: plan.slides.every(roleFit), detail: "대표·활동·포스터·수상자료를 목적에 맞게 배정" },
     { id: "empty_gallery", label: "빈 이미지 페이지 방지", passed: plan.slides.every((slide) => slide.type !== "gallery" || slide.imageRefs.length === 1), detail: "사진이 없는 갤러리 페이지는 자동 제외" },
     { id: "evidence", label: "경력 근거 연결", passed: !facts.length || plan.slides.filter((slide) => !["contact"].includes(slide.type)).every((slide) => slide.careerIndexes.some((index) => validFactIndexes.has(index))), detail: "핵심 메시지를 실제 경력과 연결" },
     { id: "contact", label: "섭외 행동 유도", passed: /문의|일정|출연|조건/.test(plan.slides.at(-1)?.title || "") && Boolean(profile.contact || profile.videoUrl || profile.officialUrl), detail: "연락처 또는 공식·영상 링크 확인" },
     { id: "final_copy", label: "내부 제작 문구 제거", passed: plan.slides.every((slide) => !/PHOTO\s*BRIEF|VERIFIED|이미지\s*(준비|삽입|교체)|사실\s*확인\s*필요/i.test(`${slide.eyebrow} ${slide.title} ${slide.body} ${slide.bullets.join(" ")}`)), detail: "고객에게 전달할 최종 문장만 표시" },
+    { id: "source_markers", label: "내부 출처 표기 제거", passed: !/(?:^|\s)(?:원문\s*)?\d+\s*(?:p|페이지|슬라이드)(?:\s|$)/i.test(plan.slides.map((slide) => `${slide.eyebrow} ${slide.title} ${slide.body} ${slide.bullets.join(" ")}`).join("\n")), detail: "2p·페이지·슬라이드 같은 분석용 표기는 노트에만 보관" },
   ];
   const score = Math.round(checks.filter((check) => check.passed).length / checks.length * 100);
   return { score, checks, issues: checks.filter((check) => !check.passed).map((check) => `${check.label}: ${check.detail}`) };
@@ -409,6 +424,12 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
   galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
   slides.forEach((slide, index) => {
     if (slide.type === "cover" || index === primaryAboutIndex) return;
+    if (slide.type === "career" && slide.careerIndexes.length > 4) {
+      slide.imageRefs = [];
+      slide.imagePurpose = "";
+      slide.layout = "timeline";
+      return;
+    }
     const asset = takeAsset(slide.type);
     slide.imageRefs = asset ? [asset.id] : [];
     slide.imagePurpose ||= slide.type === "career" ? "해당 활동과 연결되는 현장 사진" : slide.type === "contact" ? "아티스트를 기억하게 만드는 마무리 사진" : "페이지 메시지를 뒷받침하는 활동 사진";
@@ -617,7 +638,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "career") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(oneLineText(slidePlan.title, 26), { x: 0.78, y: 1.1, w: primaryImage ? 7.25 : 11.35, h: 0.7, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(wrapTextAtWords(slidePlan.title, primaryImage ? 17 : 25, 2), { x: 0.78, y: 0.98, w: primaryImage ? 7.25 : 11.35, h: 1, fontSize: primaryImage ? 32 : 35, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 6);
       if (selected[0]) slide.addText(oneLineText(formatCustomerValueEvidence(selected[0], profile.purpose), primaryImage ? 68 : 94), { x: 0.82, y: 1.78, w: primaryImage ? 7.1 : 11.35, h: 0.24, fontSize: 9, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });
@@ -645,7 +666,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       addEyebrow(slide, slidePlan.eyebrow || "섭외 문의");
       if (primaryImage) addImage(slide, primaryImage, 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const contactWidth = primaryImage ? 7.15 : 11.4;
-      slide.addText(wrapTextAtWords(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", primaryImage ? 19 : 28, 2), { x: 0.78, y: 1.35, w: contactWidth, h: 1.15, fontSize: primaryImage ? 42 : 46, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(wrapTextAtWords(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", primaryImage ? 18 : 26, 2), { x: 0.78, y: 1.25, w: contactWidth, h: 1.38, fontSize: primaryImage ? 39 : 44, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       slide.addText(oneLineText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), 52), { x: 0.82, y: 2.85, w: contactWidth, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink" });
       const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "공식 채널을 통해 문의해 주세요";
       const videoUrl = normalizeVideoUrl(profile.videoUrl || profile.officialUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
@@ -690,7 +711,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     const textX = hasImageFrame && imageOnLeft ? 6.55 : 0.78;
     const textW = hasImageFrame ? 5.9 : 11.7;
     slide.addText(oneLineText(slidePlan.eyebrow || "ARTIST PROFILE", 28), { x: textX, y: 0.6, w: Math.min(4.8, textW), h: 0.28, fontSize: 10, bold: true, charSpacing: 2.5, color: hex(p.accent), margin: 0, fit: "shrink" });
-    slide.addText(wrapTextAtWords(slidePlan.title, 20, 2), { x: textX, y: 1.35, w: textW, h: 1.3, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+    slide.addText(wrapTextAtWords(slidePlan.title, hasImageFrame ? 12 : 20, hasImageFrame ? 2 : 3), { x: textX, y: 1.3, w: textW, h: 1.5, fontSize: hasImageFrame ? 30 : 35, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
     slide.addText(wrapTextAtWords(slidePlan.body || compactText(profile.introduction, 105), 32, 4), { x: textX, y: 3.1, w: hasImageFrame ? 5.55 : 8.8, h: 1.75, fontSize: 17, color: hex(p.muted), margin: 0, breakLine: false, paraSpaceAfter: 8, fit: "shrink" });
     if (slidePlan.bullets.length) slide.addText(slidePlan.bullets.map((text) => ({ text: wrapTextAtWords(text, 30, 2), options: { bullet: { indent: 18 }, breakLine: true } })), { x: textX, y: 5.15, w: hasImageFrame ? 5.5 : 8.8, h: 1.15, fontSize: 16, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
     addEvidence(slide, slidePlan, textX, hasImageFrame ? 5.5 : 8.8);

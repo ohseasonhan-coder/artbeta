@@ -163,7 +163,11 @@ async function classifyDocumentVisuals(pages: PdfPageAsset[], artistName: string
           qualityScore: classification.qualityScore,
           classificationReason: classification.duplicateOf ? `${classification.reason} · 중복 원본 ${classification.duplicateOf}` : classification.reason,
           duplicateOf: classification.duplicateOf || undefined,
-          selected: !classification.duplicateOf && classification.role !== "exclude" && classification.relevanceScore >= 0.55 && classification.qualityScore >= 0.5,
+          selected: !classification.duplicateOf
+            && classification.role !== "exclude"
+            && classification.relevanceScore >= 0.68
+            && classification.qualityScore >= 0.68
+            && (visual.kind === "photo" ? Math.min(visual.width, visual.height) >= 360 && Math.max(visual.width, visual.height) >= 720 : Math.min(visual.width, visual.height) >= 500 && Math.max(visual.width, visual.height) >= 700),
         };
       });
       return { ...page, selected: page.selected || Boolean(extractedVisuals?.some((visual) => visual.selected)), extractedVisuals };
@@ -215,7 +219,7 @@ function itemsToCareers(items: ExtractedItem[]) {
         id: crypto.randomUUID(),
         year,
         title: item.value.replace(year, "").replace(/^\s*[·.\-/]\s*/, "").trim(),
-        organization: item.pageNumber ? `${item.label} · ${item.pageNumber}p` : item.label,
+        organization: item.label,
         sourceName: item.sourceName,
         sourceUrl: item.sourceUrl,
         verificationTier: item.verificationTier,
@@ -328,7 +332,7 @@ export default function ProfileStudio() {
         }
       } catch { /* 문서 기본 추출 결과로 계속 진행합니다. */ }
 
-      const extractedCareers = aiProfile?.facts?.length ? aiProfile.facts.map((fact) => ({ id: crypto.randomUUID(), year: fact.date, title: fact.title || fact.description, organization: [fact.organization, fact.location, fact.pageNumber ? `${fact.pageNumber}슬라이드` : ""].filter(Boolean).join(" · ") })) : itemsToCareers(finalItems);
+      const extractedCareers = aiProfile?.facts?.length ? aiProfile.facts.map((fact) => ({ id: crypto.randomUUID(), year: fact.date, title: fact.title || fact.description, organization: [fact.organization, fact.location].filter(Boolean).join(" · ") })) : itemsToCareers(finalItems);
       const uniqueCareers = extractedCareers.filter((career, index, list) => career.title.trim() && list.findIndex((target) => `${target.year}:${target.title}` === `${career.year}:${career.title}`) === index);
       const representative = data.images.find((image) => image.role === "representative") || data.images[0];
       const activityImages = data.images.filter((image) => image !== representative).slice(0, FILE_LIMITS.maxPerformanceImages);
@@ -436,7 +440,7 @@ export default function ProfileStudio() {
             id: crypto.randomUUID(),
             year: fact.date,
             title: fact.title || fact.description,
-            organization: [fact.organization, fact.location, fact.pageNumber ? `${fact.pageNumber}p` : ""].filter(Boolean).join(" · "),
+            organization: [fact.organization, fact.location].filter(Boolean).join(" · "),
           }))
         : [];
       const careerKeys = new Set<string>();

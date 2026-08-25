@@ -28,20 +28,29 @@ function shortenAtWord(value: string, max: number) {
   return result ? `${result.replace(/[.,·;:!?-]+$/, "").trim()}…` : words[0];
 }
 
+function stripInternalSourceMarkers(value: string) {
+  return value
+    .replace(/(?:^|[·|｜,;/\s])(?:원문\s*)?\d+\s*(?:p|페이지|슬라이드)(?=$|[·|｜,;/\s])/gi, " ")
+    .replace(/\s*[·|｜]\s*[·|｜]\s*/g, " · ")
+    .replace(/^\s*[·|｜,;/]+|[·|｜,;/]+\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function formatCareerFact(fact: DeckFact, compact = false) {
   const datePattern = /(?:19|20)\d{2}(?:[.\-/년월일\s]\d{1,2})*/g;
-  const title = fact.title
+  const title = stripInternalSourceMarkers(fact.title)
     .replace(datePattern, "")
     .replace(/^(주요\s*)?(경력|공연|활동|수상|선정|방송|언론)\s*[:·|｜-]?\s*/i, "")
     .replace(/\s+/g, " ")
     .replace(/^[-–—,.:·\s]+|[-–—,.:·\s]+$/g, "")
     .trim();
-  const organization = fact.organization.replace(/\s+/g, " ").trim();
+  const organization = stripInternalSourceMarkers(fact.organization);
   const showOrganization = organization && !title.replace(/\s/g, "").includes(organization.replace(/\s/g, ""));
   return {
-    date: fact.date.replace(/\s+/g, " ").trim() || "—",
+    date: stripInternalSourceMarkers(fact.date) || "—",
     title: shortenAtWord(title || fact.title.trim(), compact ? 28 : 40),
-    meta: shortenAtWord([showOrganization ? organization : "", fact.pageNumber ? `원문 ${fact.pageNumber}p` : ""].filter(Boolean).join(" · "), compact ? 28 : 48),
+    meta: shortenAtWord(showOrganization ? organization : "", compact ? 28 : 48),
   };
 }
 
