@@ -119,6 +119,18 @@ function careerSectionTitle(categories: Set<FactInput["category"]>) {
   return "주요 활동 이력";
 }
 
+function distinctCareerSectionTitle(baseTitle: string, occurrence: number) {
+  if (!occurrence) return baseTitle;
+  const alternatives: Record<string, string[]> = {
+    "대표 무대와 공식 성과": ["무대 경험을 뒷받침하는 성과", "공연과 수상으로 확인한 활동 범위"],
+    "수상 및 선정 이력": ["공식 성과와 대외 인정", "주요 수상으로 확인한 경쟁력"],
+    "대표 공연 및 활동": ["축제·공연장 주요 활동", "현장에서 쌓아 온 무대 경험"],
+    "방송 및 언론 기록": ["미디어 출연과 대외 활동", "방송 기록으로 보는 활동 범위"],
+    "주요 활동 이력": ["협업 범위를 보여주는 주요 경력", "지속적인 활동과 프로젝트 경험"],
+  };
+  return alternatives[baseTitle]?.[(occurrence - 1) % alternatives[baseTitle].length] || baseTitle;
+}
+
 function purposeFactPriority(fact: FactInput, purpose: string) {
   const category = fact.category || "career";
   const weights = /공공|기관/.test(purpose)
@@ -130,6 +142,22 @@ function purposeFactPriority(fact: FactInput, purpose: string) {
         : { performance: 0, award: 1, career: 2, media: 3 };
   const year = Number(String(fact.date || "").match(/(?:19|20)\d{2}/)?.[0] || 0);
   return (weights[category] ?? 3) * 10000 - year;
+}
+
+function paginateFactIndexes(indexes: number[], factsByIndex: Map<number, FactInput>, pageCount: number) {
+  const categoryOrder = [...new Set(indexes.map((index) => factsByIndex.get(index)?.category || "career"))];
+  const groups = categoryOrder.map((category) => indexes.filter((index) => (factsByIndex.get(index)?.category || "career") === category));
+  const pages: number[][] = [];
+  groups.forEach((group) => {
+    if (pages.length < pageCount && group.length) pages.push(group.splice(0, 5));
+  });
+  const leftovers = groups.flat();
+  while (leftovers.length && pages.length < pageCount) pages.push(leftovers.splice(0, 5));
+  leftovers.forEach((factIndex) => {
+    const target = pages.find((page) => page.length < 5);
+    if (target) target.push(factIndex);
+  });
+  return pages.slice(0, pageCount);
 }
 
 function proposalBullets(profile: Record<string, unknown>) {
@@ -174,7 +202,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as { profile: Record<string, unknown> & { requestedPageCount?: number }; assets: AssetInput[] };
     const assets = (body.assets ?? []).slice(0, 24);
     const visualAssets = assets;
-    const galleryVisualAssets = visualAssets.slice(2);
+    const galleryVisualAssets = visualAssets.slice(2).filter((asset) => asset.visualRole === "stage" && asset.visualType !== "graphic");
     const requestedPageCount = Math.max(8, Math.min(12, Number(body.profile.requestedPageCount) || 10));
     const facts = Array.isArray(body.profile.careers) ? body.profile.careers as FactInput[] : [];
     const factIndexOf = (fact: FactInput, position: number) => Number.isInteger(fact.index) ? Number(fact.index) : position;
@@ -250,12 +278,17 @@ export async function POST(request: Request) {
 
     const purpose = String(body.profile.purpose || "");
     const factIndexes = facts.map((fact, position) => ({ index: factIndexOf(fact, position), priority: purposeFactPriority(fact, purpose) })).sort((a, b) => a.priority - b.priority).map(({ index }) => index);
+    const careerPageIndexes = paginateFactIndexes(factIndexes, factsByIndex, requiredCareerSlides);
+    const careerTitleCounts = new Map<string, number>();
     careerSlides.forEach((slide, index) => {
-      const indexes = factIndexes.slice(index * 5, index * 5 + 5);
+      const indexes = careerPageIndexes[index] || [];
       const categories = new Set(indexes.map((factIndex) => factsByIndex.get(factIndex)?.category));
       slide.careerIndexes = indexes;
       slide.eyebrow = categories.has("award") ? "수상 및 선정" : categories.has("performance") ? "주요 공연 및 활동" : categories.has("media") ? "방송 및 언론" : "주요 경력";
-      slide.title = careerSectionTitle(categories);
+      const baseTitle = careerSectionTitle(categories);
+      const occurrence = careerTitleCounts.get(baseTitle) || 0;
+      careerTitleCounts.set(baseTitle, occurrence + 1);
+      slide.title = distinctCareerSectionTitle(baseTitle, occurrence);
       slide.body = "";
       slide.bullets = [];
       slide.imageRefs = [];
