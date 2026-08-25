@@ -194,7 +194,7 @@ export const initialProfile: ProfileData = {
   impressions: [],
   tone: "전문적이고 명료하게",
   purpose: "공공기관 제안",
-  pageCount: 6,
+  pageCount: 10,
   templateKey: "modern_navy_01",
   templateMode: "auto",
   introduction: "",

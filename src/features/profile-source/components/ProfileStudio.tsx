@@ -286,7 +286,14 @@ export default function ProfileStudio() {
       .then((saved) => {
         if (!saved) return;
         const merged = { ...initialProfile, ...saved };
-        setProfile({ ...merged, ...normalizedBookingConditions(merged) });
+        const legacyShortPlan = Boolean(merged.deckPlan && merged.deckPlan.slides.length < 8);
+        const migrated = {
+          ...merged,
+          pageCount: merged.pageCount < 8 ? 10 : merged.pageCount,
+          deckPlan: legacyShortPlan ? undefined : merged.deckPlan,
+          deckPlanMeta: legacyShortPlan ? undefined : merged.deckPlanMeta,
+        };
+        setProfile({ ...migrated, ...normalizedBookingConditions(migrated) });
       })
       .catch(() => { /* 새 초안으로 계속 진행 */ });
   }, []);
@@ -750,11 +757,6 @@ export default function ProfileStudio() {
   };
 
   const exportDeck = async () => {
-    if (!profile.contact.trim()) {
-      setNotice("고객이 실제로 문의할 수 있도록 섭외 연락처를 입력한 뒤 최종 PPT를 내려받아 주세요.");
-      setStep(1);
-      return;
-    }
     setBusy(true);
     setNotice("Gemini가 사진의 역할과 페이지 흐름을 설계하고 PPTX를 제작하고 있어요.");
     try {
@@ -762,8 +764,8 @@ export default function ProfileStudio() {
       setNotice(result.mode === "ai"
         ? `${result.provider} · ${result.model}이 사진을 선별하고 ${result.slideCount}페이지 PPTX를 구성했어요. 최종 품질검사 ${result.qualityScore ?? 0}점${result.qualityIssues?.length ? ` · 확인 필요 ${result.qualityIssues.length}건` : " · 모든 필수 검사 통과"}.`
         : `AI 기획을 사용할 수 없어 기본 구성으로 ${result.slideCount}페이지 PPTX를 만들었어요.`);
-    } catch {
-      setNotice("PPTX 제작 중 문제가 생겼습니다. 이미지 용량을 줄이거나 잠시 후 다시 시도해 주세요.");
+    } catch (error) {
+      setNotice(error instanceof Error ? `PPTX 다운로드 실패 · ${error.message}` : "PPTX 제작 중 문제가 생겼습니다. 이미지 용량을 줄이거나 잠시 후 다시 시도해 주세요.");
     } finally {
       setBusy(false);
     }
@@ -817,7 +819,7 @@ export default function ProfileStudio() {
         }
       }
       const prepared = await prepareDeckPlan(workingProfile);
-      setProfile({ ...workingProfile, pageCount: prepared.plan.slides.length, deckPlan: prepared.plan, deckPlanMeta: prepared.meta });
+      setProfile({ ...workingProfile, deckPlan: prepared.plan, deckPlanMeta: prepared.meta });
       setNotice(prepared.meta.mode === "ai"
         ? `${prepared.meta.provider} · ${prepared.meta.model}이 자료량에 맞춰 ${prepared.plan.slides.length}페이지를 구성했어요.${addedWebImageCount ? ` 검수된 웹 사진 ${addedWebImageCount}장 자동 추가 ·` : ""} 품질 검사 ${prepared.meta.qualityScore ?? 0}점 · 목적별 경력 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영 · 사진 반복과 텍스트 이탈 금지 적용.`
         : `${prepared.meta.warning || "Gemini 기획을 완료하지 못했습니다."} 기본 페이지 구성으로 미리보기를 만들었어요. (오류 코드: ${prepared.meta.errorCode || "DECK_PLANNING_FAILED"})`);
@@ -1204,7 +1206,7 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
     {externalImages.length > 0 && <div className="form-card web-photo-section"><div className="card-heading"><div><h2>추가한 보조 사진</h2><p>웹 사진은 출처를, AI 이미지는 생성 사실과 근거 경력을 PPT 메모에 남깁니다.</p></div></div><div className="external-image-list">{externalImages.map((image) => <article className={image.source === "ai" ? "generated" : ""} key={image.id}><img src={image.dataUrl} alt={image.title} /><div><strong>{image.title}</strong>{image.source === "ai" ? <><span className="ai-disclosure">AI 연출 이미지</span><small>{image.promptBasis || image.disclosure}</small></> : image.sourceUrl && <a href={image.sourceUrl} target="_blank" rel="noreferrer">{image.source.toUpperCase()} 출처·권한 확인</a>}</div><button aria-label="보조 이미지 삭제" onClick={() => update("externalImages", externalImages.filter((target) => target.id !== image.id))}><X size={14} /></button></article>)}</div></div>}
     <div className="form-card photo-placement-card"><div className="card-heading"><div><h2>PPT 페이지별 사진 배치</h2><p>기존 자료와 승인된 웹 사진을 우선 사용하며 같은 사진은 두 페이지에 반복하지 않습니다.</p></div></div><div className="photo-placement-grid">{photoPlacements.map((placement) => <article key={placement.page}><div><strong>{placement.page}</strong><p>{placement.guide}</p></div><div className={`photo-placement-slots slots-${placement.slots}`}>{Array.from({ length: placement.slots }, (_, index) => placement.assets[index] ? <img src={placement.assets[index].dataUrl} alt={`${placement.page} 배치 사진 ${index + 1}`} key={`${placement.assets[index].id}-${placement.page}`} /> : <span key={index}>사진 필요</span>)}</div></article>)}</div><small>사진이 부족한 페이지에는 반복 이미지 대신 어떤 사진이 필요한지 구체적인 안내를 표시합니다.</small></div>
     <div className="form-card"><div className="card-heading"><div><h2>장르·제안 목적별 디자인 시스템</h2><p>색상뿐 아니라 타이포그래피, 이미지 방향, 여백과 강조 방식이 다른 6개 시스템입니다.</p></div><button onClick={() => { update("templateMode", "auto"); update("templateKey", recommendedTemplateKey); }}><WandSparkles size={14} /> 자동 추천 적용</button></div><div className="template-grid">{designTemplates.map((item) => { const recommended = item.key === recommendedTemplateKey; return <button key={item.key} className={`template-card ${profile.templateKey === item.key ? "selected" : ""}`} onClick={() => { update("templateMode", "manual"); update("templateKey", item.key); }}><div className={`template-art system-${item.composition}`} style={{ background: item.palette.background, color: item.palette.text, fontFamily: item.typography.heading }}><span style={{ color: item.palette.accent }}>{item.category.toUpperCase()}</span><strong>ARTIST<br />PROPOSAL</strong><i style={{ background: item.palette.accent }} /></div><div><strong>{item.name}{recommended ? " · 추천" : ""}</strong><small>{item.description}</small><em>{item.recommendedFields.join(" · ")} / {item.recommendedPurposes.join(" · ")}</em></div>{profile.templateKey === item.key && <span className="template-check"><Check /></span>}</button>; })}</div><small className="template-auto-note">{profile.templateMode === "manual" ? "직접 선택한 시스템을 유지합니다." : `현재 장르와 목적에 맞춰 ${getTemplate(recommendedTemplateKey).name} 시스템을 자동 적용합니다.`}</small></div>
-    <div className="form-card compact"><div className="form-grid"><label><span>최대 페이지 수</span><select value={[5, 6, 8].includes(profile.pageCount) ? profile.pageCount : 6} onChange={(event) => update("pageCount", Number(event.target.value))}><option value={5}>최대 5페이지 · 임팩트형</option><option value={6}>최대 6페이지 · 기본형</option><option value={8}>최대 8페이지 · 상세형</option></select><small>자료가 부족하면 빈 페이지를 만들지 않고 자동으로 줄어듭니다.</small></label><label><span>프로필 목적</span><select value={profile.purpose} onChange={(event) => update("purpose", event.target.value)}><option>공공기관 제안</option><option>기업 행사 제안</option><option>축제 섭외</option><option>공연장 제출</option><option>해외 공연 제안</option></select></label></div></div>
+    <div className="form-card compact"><div className="form-grid"><label><span>페이지 구성</span><select value={[8, 10, 12].includes(profile.pageCount) ? profile.pageCount : 10} onChange={(event) => update("pageCount", Number(event.target.value))}><option value={8}>8페이지 · 핵심 제안형</option><option value={10}>10페이지 · 표준 포트폴리오</option><option value={12}>12페이지 · 상세 포트폴리오</option></select><small>소개·프로그램·대표 활동·경력·문의 페이지를 충분히 분리합니다.</small></label><label><span>프로필 목적</span><select value={profile.purpose} onChange={(event) => update("purpose", event.target.value)}><option>공공기관 제안</option><option>기업 행사 제안</option><option>축제 섭외</option><option>공연장 제출</option><option>해외 공연 제안</option></select></label></div></div>
   </section>;
 }
 
