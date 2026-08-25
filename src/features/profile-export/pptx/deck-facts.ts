@@ -37,15 +37,36 @@ function stripInternalSourceMarkers(value: string) {
     .trim();
 }
 
+function cleanFactText(value: string) {
+  const segments = stripInternalSourceMarkers(value)
+    .replace(/뮤비\s*촬영/g, "뮤직비디오 촬영")
+    .replace(/(?:원본|자료)?\s*정리\s*사진\s*\d*/gi, " ")
+    .split(/\s*[·|｜]\s*/)
+    .map((segment) => segment.replace(/^[-–—,.:;/\s]+|[-–—,.:;/\s]+$/g, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const unique: string[] = [];
+  for (const segment of segments) {
+    const normalized = segment.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+    if (!normalized) continue;
+    const containedIndex = unique.findIndex((existing) => {
+      const existingNormalized = existing.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+      return existingNormalized === normalized || (Math.min(existingNormalized.length, normalized.length) >= 4 && (existingNormalized.includes(normalized) || normalized.includes(existingNormalized)));
+    });
+    if (containedIndex < 0) unique.push(segment);
+    else if (segment.length > unique[containedIndex].length) unique[containedIndex] = segment;
+  }
+  return unique.join(" · ").replace(/[·|｜,;:.\-–—\s]+$/g, "").trim();
+}
+
 export function formatCareerFact(fact: DeckFact, compact = false) {
   const datePattern = /(?:19|20)\d{2}(?:[.\-/년월일\s]\d{1,2})*/g;
-  const title = stripInternalSourceMarkers(fact.title)
+  const title = cleanFactText(fact.title)
     .replace(datePattern, "")
     .replace(/^(주요\s*)?(경력|공연|활동|수상|선정|방송|언론)\s*[:·|｜-]?\s*/i, "")
     .replace(/\s+/g, " ")
     .replace(/^[-–—,.:·\s]+|[-–—,.:·\s]+$/g, "")
     .trim();
-  const organization = stripInternalSourceMarkers(fact.organization);
+  const organization = cleanFactText(fact.organization);
   const showOrganization = organization && !title.replace(/\s/g, "").includes(organization.replace(/\s/g, ""));
   return {
     date: stripInternalSourceMarkers(fact.date) || "—",
@@ -154,11 +175,12 @@ export function buildDeckFacts(profile: ProfileData): DeckFact[] {
     return factKey(date, title);
   }));
   const add = (fact: DeckFact) => {
-    if (!fact.title.trim()) return;
-    const key = factKey(fact.date, fact.title);
+    const cleanedFact = { ...fact, title: cleanFactText(fact.title), organization: cleanFactText(fact.organization) };
+    if (!cleanedFact.title.trim() || /^(수상[·\s]*선정|공연[·\s]*활동|방송[·\s]*언론|주요\s*경력)$/i.test(cleanedFact.title)) return;
+    const key = factKey(cleanedFact.date, cleanedFact.title);
     if (keys.has(key)) return;
     keys.add(key);
-    facts.push(fact);
+    facts.push(cleanedFact);
   };
 
   profile.careers.forEach((career) => {

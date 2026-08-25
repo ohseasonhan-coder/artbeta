@@ -9,7 +9,7 @@ import {
 import { ExternalImageAsset, ExtractedItem, initialProfile, PdfExtractedVisual, PdfPageAsset, ProfileData, ProfileImageCategory, ProfileVisualRole, SourceType } from "@/types/profile";
 import { designTemplates, getTemplate, recommendTemplateKey } from "@/features/design-templates/registry/templates";
 import { FILE_LIMITS } from "@/config/file-limits";
-import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan, selectPortfolioAssets } from "@/features/profile-export/pptx/generate-pptx";
+import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan, prepareVisualAssets, selectPortfolioAssets } from "@/features/profile-export/pptx/generate-pptx";
 import { buildDeckFacts, formatCareerFact, formatCustomerValueEvidence } from "@/features/profile-export/pptx/deck-facts";
 import { hasConfirmedBookingConditions, normalizeCastSize, normalizedBookingConditions, normalizePerformanceDuration, normalizeTechnicalRequirements } from "@/features/profile-export/pptx/booking-conditions";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
@@ -167,7 +167,7 @@ async function classifyDocumentVisuals(pages: PdfPageAsset[], artistName: string
             && classification.role !== "exclude"
             && classification.relevanceScore >= 0.68
             && classification.qualityScore >= 0.68
-            && (visual.kind === "photo" ? Math.min(visual.width, visual.height) >= 360 && Math.max(visual.width, visual.height) >= 720 : Math.min(visual.width, visual.height) >= 500 && Math.max(visual.width, visual.height) >= 700),
+            && (visual.kind === "photo" ? Math.min(visual.width, visual.height) >= 650 && Math.max(visual.width, visual.height) >= 1000 : Math.min(visual.width, visual.height) >= 600 && Math.max(visual.width, visual.height) >= 800),
         };
       });
       return { ...page, selected: page.selected || Boolean(extractedVisuals?.some((visual) => visual.selected)), extractedVisuals };
@@ -750,6 +750,11 @@ export default function ProfileStudio() {
   };
 
   const exportDeck = async () => {
+    if (!profile.contact.trim()) {
+      setNotice("고객이 실제로 문의할 수 있도록 섭외 연락처를 입력한 뒤 최종 PPT를 내려받아 주세요.");
+      setStep(1);
+      return;
+    }
     setBusy(true);
     setNotice("Gemini가 사진의 역할과 페이지 흐름을 설계하고 PPTX를 제작하고 있어요.");
     try {
@@ -771,7 +776,7 @@ export default function ProfileStudio() {
       let workingProfile = profile.primaryField.trim() ? profile : { ...profile, primaryField: "기타" };
       if (workingProfile.templateMode !== "manual") workingProfile = { ...workingProfile, templateMode: "auto", templateKey: recommendTemplateKey(workingProfile) };
       let addedWebImageCount = 0;
-      const existingAssets = selectPortfolioAssets(collectDeckAssets(workingProfile), 24);
+      const existingAssets = await prepareVisualAssets(workingProfile);
       const desiredVisualCount = Math.min(8, Math.max(5, workingProfile.pageCount));
       const pdfReference = workingProfile.pdfPageAssets
         .flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected) : [])
@@ -790,7 +795,7 @@ export default function ProfileStudio() {
             const existingUrls = new Set(workingProfile.externalImages.map((image) => image.sourceUrl).filter(Boolean));
             const remaining = Math.max(0, FILE_LIMITS.maxPerformanceImages - workingProfile.performanceImages.filter(Boolean).length - workingProfile.externalImages.length);
             const additions: ExternalImageAsset[] = (result.candidates ?? [])
-              .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !existingUrls.has(candidate.sourceUrl))
+              .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && (candidate.identityScore ?? 0) >= 0.82 && (candidate.visualMatchScore ?? 0) >= 0.82 && candidate.qualityScore >= 0.72 && !existingUrls.has(candidate.sourceUrl))
               .slice(0, Math.min(4, remaining, desiredVisualCount - existingAssets.length))
               .map(approvedWebImage);
             if (additions.length) {
@@ -918,7 +923,7 @@ function QuickReviewStep({ profile, update, setProfile, uploadImage, busy, notic
     <div className="section-heading simple-review-heading"><span>02 · 마지막 확인</span><h1>활동명만 맞으면 바로 만들 수 있어요</h1><p>소개문·사진 선택·디자인·페이지 구성은 앱이 자동으로 결정합니다.</p></div>
     <div className="simple-review-card">
       <div className="simple-review-photo">{profile.representativeImage ? <img src={profile.representativeImage} alt="자동 선택한 대표사진" /> : <ImagePlus />}<label><input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} />{profile.representativeImage ? "사진 변경" : "사진 추가"}</label></div>
-      <div className="simple-review-main"><label><span>활동명 또는 팀명</span><input autoFocus value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="활동명 또는 팀명" /></label><label><span>섭외 연락처 <small>없으면 나중에 추가해도 됩니다</small></span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><div className="auto-summary"><span><Check size={13} /> 경력·수상 {approvedItems.length || realCareers.length}건</span><span><Check size={13} /> 사용 가능 사진 {visualCount}장</span><span><Check size={13} /> 디자인 자동 추천</span></div></div>
+      <div className="simple-review-main"><label><span>활동명 또는 팀명</span><input autoFocus value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="활동명 또는 팀명" /></label><label><span>섭외 연락처 <small>최종 PPT 내려받기 전 필수</small></span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><div className="auto-summary"><span><Check size={13} /> 경력·수상 {approvedItems.length || realCareers.length}건</span><span><Check size={13} /> 사용 가능 사진 {visualCount}장</span><span><Check size={13} /> 디자인 자동 추천</span></div></div>
     </div>
     {hasBookingConditions && <div className="booking-condition-review"><div className="card-heading"><div><h2>AI가 찾은 섭외 조건</h2><p>원문에서 확인된 내용만 표시합니다. 다른 경우 바로 수정해 주세요.</p></div><span>PPT 자동 반영</span></div><div><label><span>공연 시간</span><input value={profile.performanceDuration} onChange={(event) => update("performanceDuration", event.target.value)} placeholder="예: 60분 / 30분×2회" /></label><label><span>출연 인원</span><input value={profile.castSize} onChange={(event) => update("castSize", event.target.value)} placeholder="예: 5인 구성" /></label><label><span>기술·장비 조건</span><input value={profile.technicalRequirements.join(" · ")} onChange={(event) => update("technicalRequirements", event.target.value.split(/\s*[·,\n]\s*/).filter(Boolean).slice(0, 4))} placeholder="예: 무선 마이크 2대 · DI 3채널" /></label></div></div>}
     {(representativeItems.length > 0 || realCareers.length > 0) && <div className="representative-facts-card"><div className="card-heading"><div><h2>대표 경력만 확인해 주세요</h2><p>고객에게 먼저 보여줄 중요한 경력 {Math.min(3, representativeItems.length || realCareers.length)}개입니다.</p></div><span>필수 확인</span></div><div className="representative-fact-list">{representativeItems.length ? representativeItems.map((item) => <article className={item.status === "excluded" ? "excluded" : "approved"} key={item.id}><div><span>{item.type === "award" ? "수상" : item.type === "performance" ? "공연" : item.type === "media" ? "보도" : "경력"}</span><strong>{item.value}</strong></div><div><button className={item.status !== "excluded" ? "selected" : ""} onClick={() => setItemStatus(item.id, "approved")}><Check size={13} /> 맞아요</button><button className={item.status === "excluded" ? "selected exclude" : ""} onClick={() => setItemStatus(item.id, "excluded")}><X size={13} /> 제외</button></div></article>) : realCareers.slice(0, 3).map((career) => <article className="approved" key={career.id}><div><span>직접 입력</span><strong>{[career.year, career.title, career.organization].filter(Boolean).join(" · ")}</strong></div><small><Check size={12} /> 반영됨</small></article>)}</div></div>}
@@ -1145,7 +1150,7 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
       const found = result.candidates ?? [];
       setCandidates(found);
       const remaining = Math.max(0, Math.min(4, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length));
-      const safeAdditions: ExternalImageAsset[] = found.filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)).slice(0, remaining).map(approvedWebImage);
+      const safeAdditions: ExternalImageAsset[] = found.filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && (candidate.identityScore ?? 0) >= 0.82 && (candidate.visualMatchScore ?? 0) >= 0.82 && candidate.qualityScore >= 0.72 && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl)).slice(0, remaining).map(approvedWebImage);
       if (safeAdditions.length) update("externalImages", [...externalImages, ...safeAdditions]);
       setSearchNotice(`${(result.configuredSources ?? []).join(" · ")}에서 후보 ${found.length}개를 실제 검색했습니다.${safeAdditions.length ? ` 동일 인물·품질·권리 검수를 통과한 핵심 사진 ${safeAdditions.length}장만 자동 선택했습니다.` : " 자동 사용 가능한 후보가 없어 직접 확인이 필요합니다."}${automatic ? "" : " 후보별 출처도 확인할 수 있습니다."}`);
     } catch (error) {
@@ -1171,7 +1176,7 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
   const addRecommendedImages = () => {
     const remaining = Math.max(0, FILE_LIMITS.maxPerformanceImages - profile.performanceImages.filter(Boolean).length - externalImages.length);
     const additions: ExternalImageAsset[] = candidates
-      .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl))
+      .filter((candidate) => candidate.recommended && candidate.usageStatus === "approved" && !candidate.watermarkDetected && (candidate.identityScore ?? 0) >= 0.82 && (candidate.visualMatchScore ?? 0) >= 0.82 && candidate.qualityScore >= 0.72 && !externalImages.some((image) => image.sourceUrl === candidate.sourceUrl))
       .slice(0, Math.min(4, remaining))
       .map(approvedWebImage);
     if (!additions.length) {
