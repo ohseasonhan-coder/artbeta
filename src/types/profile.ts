@@ -27,6 +27,9 @@ export interface ExtractedItem {
     | "contact"
     | "social_link"
     | "equipment"
+    | "performance_duration"
+    | "cast_size"
+    | "technical_requirement"
     | "strength"
     | "region";
   label: string;
@@ -129,6 +132,9 @@ export interface ProfileData {
   members: string;
   contact: string;
   videoUrl: string;
+  performanceDuration: string;
+  castSize: string;
+  technicalRequirements: string[];
   careers: Career[];
   strengths: string[];
   experiences: string[];
@@ -167,6 +173,9 @@ export const initialProfile: ProfileData = {
   members: "",
   contact: "",
   videoUrl: "",
+  performanceDuration: "",
+  castSize: "",
+  technicalRequirements: [],
   careers: [{ id: "career-1", year: "", title: "", organization: "" }],
   strengths: [],
   experiences: [],

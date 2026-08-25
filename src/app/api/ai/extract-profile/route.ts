@@ -44,6 +44,9 @@ const extractionSchema = z.object({
   tagline: z.string(),
   strengths: z.array(z.string()),
   equipment: z.array(z.string()),
+  performanceDuration: z.string(),
+  castSize: z.string(),
+  technicalRequirements: z.array(z.string()),
   facts: z.array(factSchema),
   visualRegions: z.array(visualRegionSchema),
   reviewNotes: z.array(z.string()),
@@ -53,7 +56,7 @@ type PageInput = Pick<PdfPageAsset, "pageNumber" | "previewDataUrl" | "text" | "
 type Extraction = z.infer<typeof extractionSchema>;
 
 function buildPrompt(pageText: string) {
-  return `문화예술인 프로필 PDF를 정밀하게 구조화하세요. 다음 규칙을 반드시 지키세요.\n\n- 문서에 실제로 있는 사실만 추출하고 추측하지 않습니다. 모르면 빈 문자열/빈 배열로 둡니다.\n- 연혁, 주요 활동, 공연, 전시, 교육, 수상·선정, 방송·언론에 있는 날짜 항목은 짧아 보여도 빠짐없이 facts에 한 건씩 담습니다.\n- 날짜·행사명·기관명·장소를 합치거나 생략하지 말고 원문의 순서와 표현을 보존합니다.\n- facts.category를 career, performance, award, media 중 가장 가까운 것으로 분류합니다.\n- 각 사실의 근거 페이지를 알면 pageNumber에 기록하고, 모르면 0으로 둡니다.\n- 소개문과 태그라인은 원문 사실만 요약해 한국어로 작성합니다.\n- 이미지 페이지는 OCR 결과가 부정확할 수 있으므로 화면에 보이는 글자를 직접 교차 확인합니다.\n- visualRegions에는 PPT에 독립적으로 사용할 수 있는 사진, 작품 이미지, 포스터, 핵심 그래픽의 위치만 기록합니다. 좌상단 기준 x/y/width/height를 페이지 전체 대비 0~1 비율로 반환합니다.\n- 문단, 표, 연혁 글자, 로고만 있는 영역은 visualRegions에 넣지 않습니다. 페이지 전체 또는 페이지 면적의 80%가 넘는 영역은 금지하고 한 페이지당 최대 4개만 반환합니다.\n\nPDF 추출 원문:\n${pageText}`;
+  return `문화예술인 프로필 PDF를 정밀하게 구조화하세요. 다음 규칙을 반드시 지키세요.\n\n- 문서에 실제로 있는 사실만 추출하고 추측하지 않습니다. 모르면 빈 문자열/빈 배열로 둡니다.\n- 연혁, 주요 활동, 공연, 전시, 교육, 수상·선정, 방송·언론에 있는 날짜 항목은 짧아 보여도 빠짐없이 facts에 한 건씩 담습니다.\n- 날짜·행사명·기관명·장소를 합치거나 생략하지 말고 원문의 순서와 표현을 보존합니다.\n- facts.category를 career, performance, award, media 중 가장 가까운 것으로 분류합니다.\n- 각 사실의 근거 페이지를 알면 pageNumber에 기록하고, 모르면 0으로 둡니다.\n- 소개문과 태그라인은 원문 사실만 요약해 한국어로 작성합니다.\n- performanceDuration에는 '공연 60분', '30분×2회', '인터미션 포함 90분'처럼 원문에서 확인되는 공연·프로그램 시간만 기록합니다. 리허설 시간, 운영 시간, 연도는 제외하며 없으면 빈 문자열입니다.\n- castSize에는 '5인조', '출연 7명', '연주자 4명+스태프 2명'처럼 실제 출연·무대 인원만 기록합니다. 관객 수, 수상 인원, 모집 인원은 제외하며 없으면 빈 문자열입니다.\n- technicalRequirements에는 마이크·DI·모니터·PA·조명·프로젝터·스크린·전력·무대 규격·반입 악기·백라인처럼 주최 측이 확인해야 할 기술 조건을 수량과 함께 원문 표현대로 담습니다. 일반적인 장비를 추측하지 않습니다.\n- equipment에는 아티스트가 직접 준비하거나 사용하는 악기·소품·장비만 담고 technicalRequirements와 중복시키지 않습니다.\n- 이미지 페이지는 OCR 결과가 부정확할 수 있으므로 화면에 보이는 글자를 직접 교차 확인합니다.\n- visualRegions에는 PPT에 독립적으로 사용할 수 있는 사진, 작품 이미지, 포스터, 핵심 그래픽의 위치만 기록합니다. 좌상단 기준 x/y/width/height를 페이지 전체 대비 0~1 비율로 반환합니다.\n- 문단, 표, 연혁 글자, 로고만 있는 영역은 visualRegions에 넣지 않습니다. 페이지 전체 또는 페이지 면적의 80%가 넘는 영역은 금지하고 한 페이지당 최대 4개만 반환합니다.\n\nPDF 추출 원문:\n${pageText}`;
 }
 
 async function analyzeWithGemini(prompt: string, pages: PageInput[], pdfBase64?: string): Promise<Extraction> {
@@ -168,6 +171,9 @@ export async function POST(request: Request) {
     profile.socialLinks.forEach((value) => items.push(makeItem("social_link", "웹/SNS", value)));
     profile.strengths.forEach((value) => items.push(makeItem("strength", "강점", value, 0.84)));
     profile.equipment.forEach((value) => items.push(makeItem("equipment", "장비·구성", value, 0.84)));
+    if (profile.performanceDuration) items.push(makeItem("performance_duration", "공연 시간", profile.performanceDuration, 0.88));
+    if (profile.castSize) items.push(makeItem("cast_size", "출연 인원", profile.castSize, 0.88));
+    profile.technicalRequirements.forEach((value) => items.push(makeItem("technical_requirement", "기술·장비 조건", value, 0.86)));
     profile.facts.forEach((fact) => {
       const labels = { career: "연혁·경력", performance: "공연·활동", award: "수상·선정", media: "방송·언론" } as const;
       const value = [fact.date, fact.title, fact.organization, fact.location, fact.description].filter(Boolean).join(" · ");
