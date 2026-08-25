@@ -83,7 +83,7 @@ interface FactInput {
   sourceName?: string;
 }
 
-const DECK_PROMPT_VERSION = "ppt-director-v2";
+const DECK_PROMPT_VERSION = "ppt-director-v3-ko-typesetting";
 
 const copyBudgets = {
   cover: { title: 26, body: 42, bullets: 0, bullet: 0 },
@@ -248,9 +248,13 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 최종 원고 규칙:
 - 화면에 보이는 모든 문장은 고객에게 그대로 전달할 최종 문장입니다.
 - PHOTO BRIEF, VERIFIED, 이미지 준비, 사실 확인 필요, 원문 페이지, 내부 메모 같은 제작 문구를 쓰지 마세요.
+- 2p, 3페이지, 원문 4p처럼 분석 과정에서만 필요한 페이지 표시는 절대로 화면 원고에 넣지 마세요.
 - 추상적인 '전문성·완성도·신뢰·몰입도·차별화·최적'을 반복하지 말고 실제 경력이나 확인된 조건으로 말하세요.
 - 제목은 페이지의 결론이어야 하며 '주요 활동', '대표 사진' 같은 단순 분류명만 쓰지 마세요.
 - 강제 줄바꿈 문자를 넣지 마세요. 문장을 짧게 쓰고 같은 단어나 문장을 반복하지 마세요.
+- 한국어 고유명사, 공연명, 기관명, 사람 이름을 줄이기 위해 임의로 띄어쓰거나 단어 중간을 자르지 마세요.
+- 한 문장이 길면 핵심 주장과 근거만 남겨 먼저 압축하세요. 글자 크기를 줄이는 방식에 의존하지 마세요.
+- 경력은 날짜·활동명·기관을 중복해서 한 문장에 반복하지 말고, 각 항목이 한눈에 읽히도록 간결하게 유지하세요.
 
 절대 분량 제한(한글·공백 포함):
 - cover: title 26자, body 42자, bullets 0개

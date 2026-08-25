@@ -2,6 +2,7 @@ import { DeckPlan, DeckPlanMeta, DeckQualityCheck, DeckSlidePlan, ProfileData, P
 import { getTemplate } from "@/features/design-templates/registry/templates";
 import { buildDeckFacts, formatCareerFact, rankDeckFactIndexes, type DeckFact } from "./deck-facts";
 import { bookingConditionBullets, hasConfirmedBookingConditions } from "./booking-conditions";
+import { compactKoreanText, fitKoreanTextBox, koreanTextWidth, normalizeKoreanDisplayText, oneLineKoreanText } from "./korean-typesetting";
 
 const hex = (value: string) => value.replace("#", "");
 
@@ -173,63 +174,15 @@ export function getDeckAssetData(profile: ProfileData, id: string) {
 }
 
 function compactText(value: string, max: number) {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (!max || text.length <= max) return max ? text : "";
-  const words = text.split(" ");
-  let result = "";
-  for (const word of words) {
-    const next = result ? `${result} ${word}` : word;
-    if (next.length > max - 1) break;
-    result = next;
-  }
-  return result ? `${result.replace(/[.,·;:!?-]+$/, "").trim()}…` : words[0];
-}
-
-function splitText(value: string, max: number) {
-  const remaining = value.replace(/\s+/g, " ").trim();
-  if (!remaining || !max) return remaining ? [remaining] : [];
-  const chunks: string[] = [];
-  let current = "";
-  remaining.split(" ").forEach((word) => {
-    const next = current ? `${current} ${word}` : word;
-    if (current && next.length > max) {
-      chunks.push(current);
-      current = word;
-    } else {
-      current = next;
-    }
-  });
-  if (current) chunks.push(current);
-  return chunks;
+  return max ? compactKoreanText(value, max) : "";
 }
 
 function wrapTextAtWords(value: string, maxCharsPerLine: number, maxLines: number) {
-  const chunks = splitText(value, maxCharsPerLine);
-  if (chunks.length <= maxLines) {
-    for (let pass = 0; pass < maxLines * 2; pass += 1) {
-      let changed = false;
-      for (let index = chunks.length - 1; index > 0; index -= 1) {
-        if (chunks[index].length >= maxCharsPerLine * 0.48) continue;
-        const previousWords = chunks[index - 1].split(" ");
-        if (previousWords.length < 2) continue;
-        const movedWord = previousWords.at(-1)!;
-        const nextLine = `${movedWord} ${chunks[index]}`;
-        if (nextLine.length > maxCharsPerLine) continue;
-        chunks[index - 1] = previousWords.slice(0, -1).join(" ");
-        chunks[index] = nextLine;
-        changed = true;
-      }
-      if (!changed) break;
-    }
-    return chunks.join("\n");
-  }
-  const visible = chunks.slice(0, maxLines);
-  visible[maxLines - 1] = compactText(visible[maxLines - 1], Math.max(4, maxCharsPerLine - 1));
-  return visible.join("\n");
+  return fitKoreanTextBox(value, { maxWidth: maxCharsPerLine, maxLines, preferredFontSize: 16, minFontSize: 16 }).text;
 }
 
 function oneLineText(value: string, max: number) {
-  return wrapTextAtWords(value, max, 1).replace(/\n/g, " ");
+  return oneLineKoreanText(value, max);
 }
 
 function clampPlanText(slide: DeckSlidePlan): DeckSlidePlan {
@@ -277,8 +230,7 @@ function normalizeNarrativeStructure(plan: DeckPlan, profile: ProfileData): Deck
   const strengths = plan.slides.find((slide) => slide.type === "strengths");
   const program = plan.slides.find((slide) => slide.type === "program" && slide.bullets.length);
   const team = plan.slides.find((slide) => slide.type === "team" && slide.bullets.length);
-  const careerLimit = profile.pageCount >= 12 ? 5 : profile.pageCount >= 10 ? 4 : 2;
-  const careers = plan.slides.filter((slide) => slide.type === "career" && slide.careerIndexes.length).slice(0, careerLimit);
+  const careers = plan.slides.filter((slide) => slide.type === "career" && slide.careerIndexes.length);
   const offerSlideCount = Number(Boolean(program)) + Number(Boolean(team));
   const galleryLimit = Math.min(5, Math.max(0, profile.pageCount - 4 - offerSlideCount - careers.length));
   const galleries = plan.slides.filter((slide) => slide.type === "gallery" && slide.imageRefs.length && (slide.title.trim() || slide.careerIndexes.length)).slice(0, galleryLimit);
@@ -302,12 +254,25 @@ function auditDeckQuality(plan: DeckPlan, profile: ProfileData, assets: VisualAs
     if (slide.type === "career") return ["history", "poster", "stage", "other"].includes(role);
     return role !== "exclude";
   });
+  const lineLimits = {
+    cover: [2, 2], about: [2, 4], strengths: [2, 0], program: [2, 2], team: [2, 2], gallery: [2, 3], career: [2, 0], contact: [2, 1],
+  } as const;
+  const hasSafeKoreanLines = (slide: DeckSlidePlan) => {
+    const [titleLines, bodyLines] = lineLimits[slide.type];
+    const blocks = [[slide.title, titleLines], [slide.body, bodyLines], ...slide.bullets.map((bullet) => [bullet, 2] as const)] as const;
+    return blocks.every(([value, maxLines]) => {
+      if (!value) return true;
+      const lines = value.split("\n");
+      return lines.length <= maxLines && lines.every((line) => line.length > 0 && !/^[,.;:!?·|｜)\]}]/.test(line) && !/[([{·|｜]$/.test(line));
+    });
+  };
   const checks: DeckQualityCheck[] = [
     { id: "structure", label: "설득 흐름", passed: plan.slides[0]?.type === "cover" && plan.slides.at(-1)?.type === "contact", detail: "표지에서 섭외 문의까지 한 방향으로 구성" },
     { id: "purpose", label: "페이지별 단일 목적", passed: ["cover", "about", "strengths", "program", "team", "contact"].every((type) => plan.slides.filter((slide) => slide.type === type).length <= 1), detail: "소개·제안·프로그램·팀 구성·근거·문의 역할 중복 방지" },
     { id: "offer_completeness", label: "섭외 선택지 반영", passed: (!profile.extractedItems.some((item) => item.type === "repertoire" && item.status !== "excluded") || plan.slides.some((slide) => slide.type === "program")) && (!profile.extractedItems.some((item) => item.type === "program_configuration" && item.status !== "excluded") || plan.slides.some((slide) => slide.type === "team")), detail: "PDF에서 확인된 레퍼토리와 팀 구성을 독립 페이지로 제시" },
     { id: "text", label: "텍스트 안전 영역", passed: plan.slides.every((slide) => { const budget = budgets[slide.type]; return slide.title.replace(/\n/g, " ").length <= budget[0] && (!budget[1] || slide.body.replace(/\n/g, " ").length <= budget[1]) && slide.bullets.length <= budget[2] && slide.bullets.every((item) => item.replace(/\n/g, " ").length <= budget[3]); }), detail: "제목·본문·목록의 절대 글자 수 제한" },
     { id: "word_wrap", label: "단어 단위 줄바꿈", passed: plan.slides.every((slide) => !/[가-힣A-Za-z0-9]-\n[가-힣A-Za-z0-9]/.test(`${slide.title}\n${slide.body}\n${slide.bullets.join("\n")}`)), detail: "단어 중간 분리와 강제 하이픈 줄바꿈 금지" },
+    { id: "korean_typesetting", label: "한국어 조판 안전성", passed: plan.slides.every(hasSafeKoreanLines), detail: "어절·괄호·구분점이 부자연스럽게 끊기지 않고 지정 줄 수 안에 배치" },
     { id: "images", label: "이미지 중복 방지", passed: new Set(imageIds).size === imageIds.length, detail: "동일 자산은 전체 PPT에서 한 번만 사용" },
     { id: "image_quality", label: "최종 이미지 품질", passed: imageIds.every((id) => { const asset = assetMap.get(id); return Boolean(asset && hasPresentationResolution(asset)); }), detail: "중간 해상도는 작은 프레임, 고해상도 가로 사진만 배경으로 사용" },
     { id: "image_identity", label: "웹 이미지 인물 일치", passed: imageIds.every((id) => { const asset = assetMap.get(id); return !asset || asset.origin !== "web" || ((asset.identityScore ?? 0) >= 0.82 && (asset.visualMatchScore ?? 0) >= 0.82); }), detail: "동일 인물 근거가 강한 승인 웹 이미지만 사용" },
@@ -327,8 +292,55 @@ function auditDeckQuality(plan: DeckPlan, profile: ProfileData, assets: VisualAs
   return { score, checks, issues: checks.filter((check) => !check.passed).map((check) => `${check.label}: ${check.detail}`) };
 }
 
-function paginateSlideCopy(slides: DeckSlidePlan[]) {
-  return slides;
+function careerFactVisualWeight(fact?: DeckFact) {
+  if (!fact) return 1;
+  const display = formatCareerFact(fact, false);
+  const titleWeight = Math.max(0, koreanTextWidth(display.title) - 28) / 34;
+  const metaWeight = Math.max(0, koreanTextWidth(display.meta) - 36) / 52;
+  return Math.min(2.25, 1 + titleWeight + metaWeight);
+}
+
+function splitCareerIndexesForLayout(indexes: number[], facts: DeckFact[]) {
+  const pages: number[][] = [];
+  let current: number[] = [];
+  let currentWeight = 0;
+  for (const index of [...new Set(indexes)]) {
+    const weight = careerFactVisualWeight(facts[index]);
+    const wouldOverflow = current.length >= 8 || current.length >= 4 && currentWeight + weight > 8.1;
+    if (current.length && wouldOverflow) {
+      pages.push(current);
+      current = [];
+      currentWeight = 0;
+    }
+    current.push(index);
+    currentWeight += weight;
+  }
+  if (current.length) pages.push(current);
+  return pages;
+}
+
+function paginateSlideCopy(slides: DeckSlidePlan[], profile: ProfileData) {
+  const facts = buildDeckFacts(profile);
+  const titleCounts = new Map<string, number>();
+  return slides.flatMap((slide) => {
+    if (slide.type !== "career") return [slide];
+    const pages = splitCareerIndexesForLayout(slide.careerIndexes, facts);
+    if (!pages.length) return [];
+    return pages.map((careerIndexes, pageIndex) => {
+      const pageFacts = careerIndexes.map((index) => facts[index]).filter(Boolean);
+      const baseTitle = pageIndex ? careerSlideTitle(pageFacts) : slide.title || careerSlideTitle(pageFacts);
+      const occurrence = titleCounts.get(baseTitle) || 0;
+      const pageTextWeight = careerIndexes.reduce((total, index) => total + careerFactVisualWeight(facts[index]), 0);
+      titleCounts.set(baseTitle, occurrence + 1);
+      return {
+        ...slide,
+        title: distinctCareerSlideTitle(baseTitle, occurrence),
+        careerIndexes,
+        imageRefs: pageIndex || pageTextWeight > 5.2 ? [] : slide.imageRefs,
+        layout: "timeline" as const,
+      };
+    });
+  });
 }
 
 function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
@@ -546,7 +558,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     bullets: [profile.contact, profile.videoUrl || profile.officialUrl].filter(Boolean),
     imageRefs: [], imagePurpose: "", careerIndexes: evidenceAt(4), layout: "editorial",
   };
-  return enforceDeckSafety({ narrative: "고객이 얻을 현장 가치, 실제 장면, 검증된 경력, 섭외 행동 순서로 선택을 지원", visualDirection: "고객 관점의 짧은 결론과 출처가 분명한 실제 이미지 중심", slides: paginateSlideCopy([...slides, contact]).map(fitSlideCopy) });
+  return enforceDeckSafety({ narrative: "고객이 얻을 현장 가치, 실제 장면, 검증된 경력, 섭외 행동 순서로 선택을 지원", visualDirection: "고객 관점의 짧은 결론과 출처가 분명한 실제 이미지 중심", slides: paginateSlideCopy([...slides, contact], profile).map(fitSlideCopy) });
 }
 
 function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: ProfileData): DeckPlan {
@@ -625,7 +637,10 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
   }).filter((candidate) => candidate.score >= 24).sort((left, right) => right.score - left.score).slice(0, 1).map(({ factIndex }) => factIndex);
   slides.forEach((slide, index) => {
     if (slide.type === "cover" || index === primaryAboutIndex) return;
-    const asset = slide.type === "gallery" ? reservedGalleryAssets.shift() : slide.type === "career" && slide.careerIndexes.length > 5 ? undefined : takeAsset(slide.type);
+    const careerTextWeight = slide.type === "career"
+      ? slide.careerIndexes.reduce((total, factIndex) => total + careerFactVisualWeight(deckFacts[factIndex]), 0)
+      : 0;
+    const asset = slide.type === "gallery" ? reservedGalleryAssets.shift() : slide.type === "career" && (slide.careerIndexes.length > 5 || careerTextWeight > 5.2) ? undefined : takeAsset(slide.type);
     slide.imageRefs = asset ? [asset.id] : [];
     if (slide.type === "gallery") slide.careerIndexes = asset ? matchingFactIndexes(asset) : [];
     slide.imagePurpose ||= slide.type === "career" ? "해당 활동과 연결되는 현장 사진" : slide.type === "contact" ? "아티스트를 기억하게 만드는 마무리 사진" : "페이지 메시지를 뒷받침하는 활동 사진";
@@ -670,6 +685,24 @@ function ensureEvidenceCoverage(plan: DeckPlan, profile: ProfileData): DeckPlan 
       return { ...slide, careerIndexes: evidence };
     }),
   };
+}
+
+function ensureCompleteCareerCoverage(plan: DeckPlan, profile: ProfileData): DeckPlan {
+  const facts = buildDeckFacts(profile);
+  if (!facts.length) return plan;
+  const slides = plan.slides.map((slide) => ({ ...slide, careerIndexes: [...slide.careerIndexes] }));
+  const careerSlides = slides.filter((slide) => slide.type === "career");
+  const covered = new Set(careerSlides.flatMap((slide) => slide.careerIndexes).filter((index) => facts[index]));
+  const missing = rankDeckFactIndexes(facts, profile.purpose, facts.length).filter((index) => !covered.has(index));
+  if (!missing.length) return plan;
+  if (careerSlides.length) {
+    careerSlides[careerSlides.length - 1].careerIndexes.push(...missing);
+  } else {
+    const careerSlide: DeckSlidePlan = { type: "career", eyebrow: "주요 경력", title: careerSlideTitle(missing.map((index) => facts[index]).filter(Boolean)), body: "", bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: missing, layout: "timeline" };
+    const contactIndex = slides.findIndex((slide) => slide.type === "contact");
+    slides.splice(contactIndex >= 0 ? contactIndex : slides.length, 0, careerSlide);
+  }
+  return { ...plan, slides };
 }
 
 async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
@@ -719,15 +752,15 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
   const assets = await prepareVisualAssets(profile);
   try {
     const result = await requestDeckPlan(profile, assets);
-    const coveredPlan = ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(result.plan, profile), assets, profile), profile);
-    const safePlan = enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) });
+    const coveredPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(result.plan, profile), assets, profile), profile), profile);
+    const safePlan = enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides, profile).map(fitSlideCopy) });
     const finalPlan = normalizeNarrativeStructure(safePlan, profile);
     const quality = auditDeckQuality(finalPlan, profile, assets);
     return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, promptVersion: result.promptVersion, qualityScore: quality.score, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks: quality.checks, qualityIssues: quality.issues } };
   } catch (error) {
     const failure = error as Error & { code?: string };
-    const coveredLocalPlan = ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(fallbackPlan(profile, assets), profile), assets, profile), profile);
-    const localPlan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredLocalPlan, slides: paginateSlideCopy(coveredLocalPlan.slides).map(fitSlideCopy) }), profile);
+    const coveredLocalPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(fallbackPlan(profile, assets), profile), assets, profile), profile), profile);
+    const localPlan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredLocalPlan, slides: paginateSlideCopy(coveredLocalPlan.slides, profile).map(fitSlideCopy) }), profile);
     const quality = auditDeckQuality(localPlan, profile, assets);
     return {
       plan: localPlan,
@@ -755,8 +788,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const prepared = profile.deckPlan && profile.deckPlanMeta && profile.deckPlan.slides.length >= minimumUsefulSlides
     ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
     : await prepareDeckPlan(profile);
-  const coveredPlan = ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(prepared.plan, profile), assets, profile), profile);
-  const plan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) }), profile);
+  const coveredPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(prepared.plan, profile), assets, profile), profile), profile);
+  const plan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides, profile).map(fitSlideCopy) }), profile);
   const exportMeta = prepared.meta;
   const deckFacts = buildDeckFacts(profile);
 
@@ -799,6 +832,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     slide.addText("주요 활동", { x, y: 6.63, w: 0.82, h: 0.2, fontSize: 8, bold: true, color: hex(p.accent), margin: 0 });
     slide.addText(oneLineText([evidence.date !== "—" ? evidence.date : "", evidence.title, evidence.meta].filter(Boolean).join(" · "), 72), { x: x + 0.98, y: 6.6, w: Math.max(1, w - 0.98), h: 0.27, fontSize: 9, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
   };
+  const fittedText = (value: string, maxWidth: number, maxLines: number, preferredFontSize: number, minFontSize: number) =>
+    fitKoreanTextBox(value, { maxWidth, maxLines, preferredFontSize, minFontSize });
   plan.slides.forEach((slidePlan, slideIndex) => {
     const slide = pptx.addSlide();
     const images = pickImages(slidePlan);
@@ -822,9 +857,10 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (isCover && backgroundImage) {
       addEyebrow(slide, slidePlan.eyebrow, true);
-      const coverTitle = wrapTextAtWords(slidePlan.title || profile.artistName || "ARTIST", 14, 2);
-      slide.addText(coverTitle, { x: 0.78, y: 1.5, w: 6.15, h: 2.05, fontSize: coverTitle.replace(/\s/g, "").length > 18 ? 44 : 54, bold: true, color: "FFFFFF", margin: 0, valign: "middle", fit: "shrink" });
-      slide.addText(wrapTextAtWords(slidePlan.body || profile.tagline, 24, 2), { x: 0.82, y: 4.02, w: 5.95, h: 0.82, fontSize: 22, color: "FFFFFF", transparency: 10, margin: 0, fit: "shrink" });
+      const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", 14, 2, 54, 40);
+      const coverBody = fittedText(slidePlan.body || profile.tagline, 24, 2, 22, 18);
+      slide.addText(coverTitle.text, { x: 0.78, y: 1.5, w: 6.15, h: 2.05, fontSize: coverTitle.fontSize, bold: true, color: "FFFFFF", margin: 0, valign: "middle", fit: "shrink" });
+      slide.addText(coverBody.text, { x: 0.82, y: 4.02, w: 5.95, h: 0.82, fontSize: coverBody.fontSize, color: "FFFFFF", transparency: 10, margin: 0, fit: "shrink" });
       slide.addShape(pptx.ShapeType.line, { x: 0.82, y: 5.48, w: 1.25, h: 0, line: { color: hex(p.accent), width: 3 } });
       slide.addText(oneLineText(`${profile.primaryField} · ${profile.purpose} · ${profile.region}`.replace(/^ · | · $/g, ""), 52), { x: 0.82, y: 5.68, w: 6, h: 0.3, fontSize: 11, bold: true, color: "FFFFFF", margin: 0, fit: "shrink" });
       return;
@@ -843,11 +879,10 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         slide.addText(oneLineText(profile.primaryField || "ARTIST", 18), { x: 10.42, y: 5.45, w: 1.98, h: 0.42, fontSize: 14, bold: true, color: hex(p.accent), margin: 0, align: "center", fit: "shrink" });
       }
       addEyebrow(slide, slidePlan.eyebrow, false, copyX);
-      const coverTitle = wrapTextAtWords(slidePlan.title || profile.artistName || "ARTIST", 14, 2);
-      const coverTitleLength = coverTitle.replace(/\s/g, "").length;
-      const coverTitleFontSize = coverTitleLength > 20 ? 36 : coverTitleLength > 14 ? 42 : 50;
-      slide.addText(coverTitle, { x: copyX, y: 1.55, w: copyW, h: 2.1, fontSize: primaryImage ? coverTitleFontSize : Math.min(54, coverTitleFontSize + 4), bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-      slide.addText(wrapTextAtWords(slidePlan.body || profile.tagline, primaryImage ? 23 : 34, 2), { x: copyX + 0.04, y: 4.05, w: primaryImage ? 5.65 : 8.2, h: 0.78, fontSize: 21, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
+      const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", primaryImage ? 14 : 20, 2, primaryImage ? 50 : 54, 38);
+      const coverBody = fittedText(slidePlan.body || profile.tagline, primaryImage ? 23 : 34, 2, 21, 17);
+      slide.addText(coverTitle.text, { x: copyX, y: 1.55, w: copyW, h: 2.1, fontSize: coverTitle.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
+      slide.addText(coverBody.text, { x: copyX + 0.04, y: 4.05, w: primaryImage ? 5.65 : 8.2, h: 0.78, fontSize: coverBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
       slide.addShape(pptx.ShapeType.line, { x: copyX + 0.04, y: 5.55, w: primaryImage ? 1.1 : 1.65, h: 0, line: { color: hex(p.accent), width: 3 } });
       slide.addText(oneLineText(`${profile.primaryField} · ${profile.purpose} · ${profile.region}`.replace(/^ · | · $/g, ""), 52), { x: copyX + 0.04, y: 5.75, w: primaryImage ? 5.9 : 8.7, h: 0.28, fontSize: 11, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
       return;
@@ -879,7 +914,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "program") {
       addEyebrow(slide, slidePlan.eyebrow || "공연 프로그램");
-      slide.addText(wrapTextAtWords(slidePlan.title, primaryImage ? 18 : 24, 2), { x: 0.78, y: 1.1, w: primaryImage ? 7.05 : 11.4, h: 1.0, fontSize: 37, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      const programTitle = fittedText(slidePlan.title, primaryImage ? 18 : 24, 2, 37, 31);
+      slide.addText(programTitle.text, { x: 0.78, y: 1.1, w: primaryImage ? 7.05 : 11.4, h: 1.0, fontSize: programTitle.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (slidePlan.body) slide.addText(oneLineText(slidePlan.body, 50), { x: 0.82, y: 2.2, w: primaryImage ? 7.0 : 11.2, h: 0.35, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.35, 0.72, 4.35, 6.08, slidePlan.imagePurpose, "cover");
       const items = slidePlan.bullets.slice(0, 6);
@@ -892,7 +928,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         const x = 0.82 + column * (columnWidth + 0.25);
         const y = 2.9 + row * 1.02;
         slide.addText(String(index + 1).padStart(2, "0"), { x, y, w: 0.42, h: 0.26, fontSize: 10, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addText(oneLineText(item, primaryImage ? 24 : 28), { x: x + 0.52, y: y - 0.02, w: columnWidth - 0.52, h: 0.34, fontSize: 17, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+        const itemFit = fittedText(item, primaryImage ? 24 : 28, 1, 17, 15);
+        slide.addText(itemFit.text, { x: x + 0.52, y: y - 0.02, w: columnWidth - 0.52, h: 0.34, fontSize: itemFit.fontSize, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x, y: y + 0.48, w: columnWidth, h: 0, line: { color: hex(p.muted), transparency: 76, width: 0.7 } });
       });
       addFooter(slide, slideIndex + 1);
@@ -905,12 +942,14 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       const copyW = primaryImage ? 6.05 : 11.4;
       if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 8.12, 0.5, 4.8, 6.45, slidePlan.imagePurpose, "cover");
       addEyebrow(slide, slidePlan.eyebrow || "출연 구성", false, copyX);
-      slide.addText(wrapTextAtWords(slidePlan.title, primaryImage ? 17 : 24, 2), { x: copyX, y: 1.15, w: copyW, h: 1.12, fontSize: 37, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      const teamTitle = fittedText(slidePlan.title, primaryImage ? 17 : 24, 2, 37, 31);
+      slide.addText(teamTitle.text, { x: copyX, y: 1.15, w: copyW, h: 1.12, fontSize: teamTitle.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (slidePlan.body) slide.addText(oneLineText(slidePlan.body, 46), { x: copyX + 0.04, y: 2.48, w: copyW - 0.1, h: 0.34, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
       slidePlan.bullets.slice(0, 4).forEach((item, index) => {
         const y = 3.2 + index * 0.78;
         slide.addText(String(index + 1).padStart(2, "0"), { x: copyX + 0.04, y, w: 0.45, h: 0.28, fontSize: 11, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addText(oneLineText(item, primaryImage ? 34 : 54), { x: copyX + 0.68, y: y - 0.03, w: copyW - 0.78, h: 0.36, fontSize: 18, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+        const itemFit = fittedText(item, primaryImage ? 34 : 54, 1, 18, 15);
+        slide.addText(itemFit.text, { x: copyX + 0.68, y: y - 0.03, w: copyW - 0.78, h: 0.36, fontSize: itemFit.fontSize, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x: copyX + 0.68, y: y + 0.47, w: copyW - 0.82, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.65 } });
       });
       addFooter(slide, slideIndex + 1);
@@ -919,26 +958,29 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "career") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(wrapTextAtWords(slidePlan.title, primaryImage ? 17 : 25, 2), { x: 0.78, y: 1.16, w: primaryImage ? 7.25 : 11.35, h: 0.82, fontSize: primaryImage ? 35 : 38, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      const careerHeading = fittedText(slidePlan.title, primaryImage ? 17 : 25, 2, primaryImage ? 35 : 38, 31);
+      slide.addText(careerHeading.text, { x: 0.78, y: 1.16, w: primaryImage ? 7.25 : 11.35, h: 0.82, fontSize: careerHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 8);
+      const columns = primaryImage || selected.length <= 3 ? 1 : 2;
+      const rowsPerColumn = Math.ceil(selected.length / columns);
       selected.forEach((item, index) => {
         const display = formatCareerFact(item, false);
-        const columns = primaryImage || selected.length <= 3 ? 1 : 2;
-        const rowsPerColumn = Math.ceil(selected.length / columns);
         const column = Math.floor(index / rowsPerColumn);
         const row = index % rowsPerColumn;
         const x = 0.82 + column * 6.05;
-        const rowStep = primaryImage ? 0.88 : columns === 2 ? 1.02 : 1.25;
+        const rowStep = primaryImage ? 0.9 : columns === 2 ? 1.08 : 1.25;
         const y = 2.2 + row * rowStep;
         const hasDate = display.date !== "—";
         const contentX = x + (hasDate ? 1.13 : 0.25);
         const titleW = primaryImage ? (hasDate ? 6.25 : 7.13) : columns === 2 ? (hasDate ? 4.55 : 5.43) : (hasDate ? 10.35 : 11.23);
+        const titleFit = fittedText(display.title, columns === 2 ? 30 : 48, columns === 2 ? 2 : 1, columns === 1 && !primaryImage ? 18 : 16, 15);
+        const metaFit = fittedText(display.meta, columns === 2 ? 40 : 54, 1, columns === 1 && !primaryImage ? 12 : 11, 10);
         slide.addShape(pptx.ShapeType.ellipse, { x, y: y + 0.08, w: 0.12, h: 0.12, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 } });
         if (hasDate) slide.addText(oneLineText(display.date, 12), { x: x + 0.25, y, w: 0.85, h: 0.32, fontSize: 14, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });
         slide.addText(oneLineText(item.categoryLabel, 12), { x: contentX, y: y + 0.02, w: 1.05, h: 0.22, fontSize: 10, bold: true, color: hex(p.muted), margin: 0, fit: "shrink" });
-        slide.addText(oneLineText(display.title, columns === 2 ? 30 : 48), { x: contentX, y: y + 0.28, w: titleW, h: 0.34, fontSize: columns === 1 && !primaryImage ? 18 : 16, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-        if (display.meta) slide.addText(oneLineText(display.meta, 44), { x: contentX, y: y + 0.61, w: titleW, h: 0.21, fontSize: columns === 1 && !primaryImage ? 12 : 11, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
+        slide.addText(titleFit.text, { x: contentX, y: y + 0.28, w: titleW, h: columns === 2 ? 0.48 : 0.34, fontSize: titleFit.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
+        if (display.meta) slide.addText(metaFit.text, { x: contentX, y: y + (columns === 2 ? 0.76 : 0.61), w: titleW, h: 0.21, fontSize: metaFit.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x: contentX, y: y + rowStep - 0.08, w: titleW, h: 0, line: { color: hex(p.muted), transparency: 80, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
@@ -949,7 +991,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       addEyebrow(slide, slidePlan.eyebrow || "섭외 문의");
       if (primaryImage) addImage(slide, primaryImage, 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const contactWidth = primaryImage ? 7.15 : 11.4;
-      slide.addText(wrapTextAtWords(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", primaryImage ? 18 : 26, 2), { x: 0.78, y: 1.25, w: contactWidth, h: 1.38, fontSize: primaryImage ? 39 : 44, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      const contactHeading = fittedText(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", primaryImage ? 18 : 26, 2, primaryImage ? 39 : 44, 34);
+      slide.addText(contactHeading.text, { x: 0.78, y: 1.25, w: contactWidth, h: 1.38, fontSize: contactHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       slide.addText(oneLineText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), 52), { x: 0.82, y: 2.85, w: contactWidth, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink" });
       const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "출연 일정 및 조건 문의";
       const videoUrl = normalizeVideoUrl(profile.videoUrl || profile.officialUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
@@ -968,14 +1011,16 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "strengths") {
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(wrapTextAtWords(slidePlan.title, primaryImage ? 17 : 26, 2), { x: 0.78, y: 1.16, w: primaryImage ? 7.2 : 11.4, h: 1.04, fontSize: primaryImage ? 35 : 38, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      const strengthHeading = fittedText(slidePlan.title, primaryImage ? 17 : 26, 2, primaryImage ? 35 : 38, 31);
+      slide.addText(strengthHeading.text, { x: 0.78, y: 1.16, w: primaryImage ? 7.2 : 11.4, h: 1.04, fontSize: strengthHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const bullets = slidePlan.bullets.length ? slidePlan.bullets : profile.generatedStrengths;
       bullets.slice(0, 3).forEach((item, index) => {
         const y = 2.48 + index * 1.25;
         slide.addText(`0${index + 1}`, { x: 0.82, y, w: 0.55, h: 0.35, fontSize: 15, bold: true, color: hex(p.accent), margin: 0 });
         slide.addShape(pptx.ShapeType.line, { x: 1.52, y: y + 0.16, w: 0.65, h: 0, line: { color: hex(p.accent), width: 1.2 } });
-        slide.addText(wrapTextAtWords(item, primaryImage ? 24 : 40, 2), { x: 2.42, y: y - 0.15, w: primaryImage ? 5.55 : 8.6, h: 0.78, fontSize: primaryImage ? 19 : 22, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+        const bulletFit = fittedText(item, primaryImage ? 24 : 40, 2, primaryImage ? 19 : 22, 17);
+        slide.addText(bulletFit.text, { x: 2.42, y: y - 0.15, w: primaryImage ? 5.55 : 8.6, h: 0.78, fontSize: bulletFit.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       });
       addEvidence(slide, slidePlan, 0.82, primaryImage ? 7.1 : 11.4);
       addFooter(slide, slideIndex + 1);
@@ -987,9 +1032,11 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     const hasImageFrame = Boolean(primaryImage);
     const textX = hasImageFrame && imageOnLeft ? 6.55 : 0.78;
     const textW = hasImageFrame ? 5.9 : 11.7;
+    const aboutHeading = fittedText(slidePlan.title, hasImageFrame ? 12 : 20, hasImageFrame ? 2 : 3, hasImageFrame ? 35 : 38, 30);
+    const aboutBody = fittedText(slidePlan.body || compactText(profile.introduction, 105), hasImageFrame ? 32 : 48, 4, 17, 15);
     slide.addText(oneLineText(slidePlan.eyebrow || "ARTIST PROFILE", 28), { x: textX, y: 0.6, w: Math.min(4.8, textW), h: 0.28, fontSize: 10, bold: true, charSpacing: 2.5, color: hex(p.accent), margin: 0, fit: "shrink" });
-    slide.addText(wrapTextAtWords(slidePlan.title, hasImageFrame ? 12 : 20, hasImageFrame ? 2 : 3), { x: textX, y: 1.3, w: textW, h: 1.5, fontSize: hasImageFrame ? 35 : 38, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
-    slide.addText(wrapTextAtWords(slidePlan.body || compactText(profile.introduction, 105), 32, 4), { x: textX, y: 3.1, w: hasImageFrame ? 5.55 : 8.8, h: 1.75, fontSize: 17, color: hex(p.muted), margin: 0, breakLine: false, paraSpaceAfter: 8, fit: "shrink" });
+    slide.addText(aboutHeading.text, { x: textX, y: 1.3, w: textW, h: 1.5, fontSize: aboutHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+    slide.addText(aboutBody.text, { x: textX, y: 3.1, w: hasImageFrame ? 5.55 : 8.8, h: 1.75, fontSize: aboutBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, paraSpaceAfter: 8, fit: "shrink" });
     if (slidePlan.bullets.length) slide.addText(slidePlan.bullets.map((text) => ({ text: oneLineText(text, 38), options: { bullet: { indent: 18 }, breakLine: true } })), { x: textX, y: 5.05, w: hasImageFrame ? 5.5 : 8.8, h: 1.28, fontSize: 16, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
     addFooter(slide, slideIndex + 1);
   });
