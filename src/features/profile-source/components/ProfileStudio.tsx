@@ -283,7 +283,17 @@ export default function ProfileStudio() {
 
   useEffect(() => {
     void loadProfileDraft()
-      .then((saved) => {
+      .then(async (saved) => {
+        const sampleCleanupKey = "artfolio:legacy-sample-draft-cleanup:v1";
+        const cleanupChecked = window.localStorage.getItem(sampleCleanupKey) === "done";
+        window.localStorage.setItem(sampleCleanupKey, "done");
+        const normalizedSavedName = saved?.artistName.trim().replace(/[\s/_|·-]+/g, "").toLowerCase() || "";
+        const isLegacySample = !cleanupChecked && ["아리현", "arihyun", "arihyun아리현"].includes(normalizedSavedName);
+        if (isLegacySample) {
+          await clearProfileDraft();
+          setProfile(initialProfile);
+          return;
+        }
         if (!saved) return;
         const merged = { ...initialProfile, ...saved };
         const legacyShortPlan = Boolean(merged.deckPlan && merged.deckPlan.slides.length < 8);
