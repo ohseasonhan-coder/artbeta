@@ -45,16 +45,53 @@ export function formatCareerFact(fact: DeckFact, compact = false) {
   };
 }
 
-export function formatCustomerValueEvidence(fact: DeckFact) {
+export function formatCustomerValueEvidence(fact: DeckFact, purpose = "") {
   const formatted = formatCareerFact(fact, true);
+  const isFestival = /축제|페스티벌/.test(purpose);
+  const isCorporate = /기업|브랜드/.test(purpose);
+  const isVenue = /공연장|극장/.test(purpose);
+  const isPublic = /공공|기관/.test(purpose);
   const value = fact.category === "award"
-    ? "공식 성과가 선택의 신뢰를 높입니다"
+    ? isPublic ? "공식 선정 이력이 사업 신뢰도를 뒷받침합니다" : "공식 성과가 섭외 판단의 신뢰를 높입니다"
     : fact.category === "performance"
-      ? "검증된 무대 경험이 현장 운영의 안정성을 높입니다"
+      ? isFestival ? "실제 무대 경험이 현장 대응력을 보여줍니다" : isVenue ? "공연 이력이 프로그램 실행 가능성을 보여줍니다" : "실제 무대 경험이 안정적인 운영을 뒷받침합니다"
       : fact.category === "media"
-        ? "대외 기록이 인지도와 전달력을 뒷받침합니다"
-        : "지속적인 활동이 협업 신뢰를 뒷받침합니다";
+        ? isCorporate ? "대외 노출 이력이 행사 전달력을 뒷받침합니다" : "대외 기록이 인지도와 전달력을 보여줍니다"
+        : "지속적인 활동 이력이 협업 신뢰를 뒷받침합니다";
   return `근거 · ${[formatted.date !== "—" ? formatted.date : "", formatted.title].filter(Boolean).join(" ")} — ${value}`;
+}
+
+function purposeCategoryScore(category: DeckFactCategory, purpose: string) {
+  if (/공공|기관/.test(purpose)) return { award: 36, performance: 28, career: 22, media: 16 }[category];
+  if (/기업|브랜드/.test(purpose)) return { media: 34, performance: 32, career: 24, award: 20 }[category];
+  if (/축제|페스티벌/.test(purpose)) return { performance: 38, media: 25, award: 22, career: 20 }[category];
+  if (/공연장|극장/.test(purpose)) return { performance: 40, award: 26, career: 24, media: 14 }[category];
+  if (/해외|글로벌/.test(purpose)) return { performance: 36, award: 30, media: 24, career: 20 }[category];
+  return { award: 32, performance: 30, career: 22, media: 18 }[category];
+}
+
+export function rankDeckFactIndexes(facts: DeckFact[], purpose: string, limit: number) {
+  const currentYear = new Date().getFullYear();
+  const scored = facts.map((fact, index) => {
+    const year = Number(fact.date.match(/(?:19|20)\d{2}/)?.[0] || 0);
+    const recency = year ? Math.max(0, 12 - Math.min(12, currentYear - year)) : 2;
+    const authorityText = `${fact.title} ${fact.organization}`;
+    const authority = /문화체육관광부|예술위원회|문화재단|시청|도청|구청|국립|시립|세종문화회관|예술의전당|방송|신문|festival|페스티벌/i.test(authorityText) ? 14 : 4;
+    const verification = fact.verificationTier === "primary" ? 16 : fact.verificationTier === "platform" ? 11 : fact.source === "profile" ? 9 : fact.source === "pdf" ? 8 : 4;
+    const completeness = [fact.date, fact.title, fact.organization].filter((value) => value.trim()).length * 2;
+    return { index, category: fact.category, score: purposeCategoryScore(fact.category, purpose) + recency + authority + verification + completeness };
+  }).sort((left, right) => right.score - left.score || left.index - right.index);
+
+  const selected: number[] = [];
+  const categoryCounts = new Map<DeckFactCategory, number>();
+  while (selected.length < Math.min(limit, facts.length)) {
+    const next = scored.find((candidate) => !selected.includes(candidate.index) && (categoryCounts.get(candidate.category) || 0) < Math.max(2, Math.ceil(limit / 2)))
+      || scored.find((candidate) => !selected.includes(candidate.index));
+    if (!next) break;
+    selected.push(next.index);
+    categoryCounts.set(next.category, (categoryCounts.get(next.category) || 0) + 1);
+  }
+  return selected;
 }
 
 const categoryLabels: Record<DeckFactCategory, string> = {

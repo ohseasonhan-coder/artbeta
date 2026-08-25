@@ -62,6 +62,7 @@ export interface PdfExtractedVisual {
   relevanceScore?: number;
   qualityScore?: number;
   classificationReason?: string;
+  duplicateOf?: string;
   selected: boolean;
 }
 
@@ -116,6 +117,15 @@ export interface DeckPlanMeta {
   qualityScore?: number;
   coveredFactCount?: number;
   totalFactCount?: number;
+  qualityChecks?: DeckQualityCheck[];
+  qualityIssues?: string[];
+}
+
+export interface DeckQualityCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+  detail: string;
 }
 
 export interface ProfileData {
