@@ -66,7 +66,7 @@ interface FactInput {
 
 const copyBudgets = {
   cover: { title: 26, body: 42, bullets: 0, bullet: 0 },
-  about: { title: 32, body: 105, bullets: 2, bullet: 30 },
+  about: { title: 32, body: 105, bullets: 3, bullet: 38 },
   strengths: { title: 32, body: 0, bullets: 3, bullet: 48 },
   gallery: { title: 32, body: 42, bullets: 0, bullet: 0 },
   career: { title: 32, body: 0, bullets: 0, bullet: 0 },
@@ -135,12 +135,19 @@ function purposeFactPriority(fact: FactInput, purpose: string) {
 function proposalBullets(profile: Record<string, unknown>) {
   const confirmedConditions = bookingConditionBullets(profile);
   if (confirmedConditions.length) return confirmedConditions;
+  const extractedFacts = Array.isArray(profile.extractedFacts) ? profile.extractedFacts as Array<Record<string, unknown>> : [];
+  const extractedValues = (type: string) => extractedFacts
+    .filter((item) => item.type === type)
+    .map((item) => String(item.value || "").trim())
+    .filter(Boolean);
+  const configurations = extractedValues("program_configuration");
+  const repertoire = extractedValues("repertoire");
   const strengths = Array.isArray(profile.strengths) ? profile.strengths.map(String).filter(Boolean) : [];
   const generatedStrengths = Array.isArray(profile.generatedStrengths) ? profile.generatedStrengths.map(String).filter(Boolean) : [];
   const strength = generatedStrengths[0] || strengths[0] || String(profile.tagline || "");
   const proposal = [
-    `무대 구성 · ${[profile.primaryField, profile.secondaryField].filter(Boolean).join(" · ")}`,
-    strength ? `관객 경험 · ${strength}` : "",
+    `무대 구성 · ${configurations[0] || [profile.primaryField, profile.secondaryField].filter(Boolean).join(" · ")}`,
+    repertoire.length ? `대표 레퍼토리 · ${repertoire.slice(0, 2).join(" · ")}` : strength ? `관객 경험 · ${strength}` : "",
     `제안 범위 · ${[profile.purpose, profile.region].filter(Boolean).join(" · ")}`,
   ].filter((item) => item && !item.endsWith("· "));
   return proposal.map((item) => compactText(item, 48)).slice(0, 3);
@@ -179,7 +186,12 @@ export async function POST(request: Request) {
     const parts: Part[] = [{
       text: `당신은 문화예술인 섭외·제안용 포트폴리오를 설계하는 시니어 아트디렉터입니다. 사진 모음이나 활동 자료집이 아니라, 제안서를 받는 고객이 이 예술인을 자신의 행사에 섭외했을 때 무엇을 얻는지 이해하고 실제 문의하도록 만드는 PPT를 기획하세요.\n\n커뮤니케이션 목표: ${String(body.profile.purpose || "공연·행사 제안")} 담당자가 30초 안에 아티스트의 정체성, 제안 가능한 무대, 행사 적합성, 실제 활동 근거를 확인하고 마지막 장에서 일정과 출연 조건을 문의하게 만듭니다.\n\n중요: careers는 직접 입력한 경력과 PDF·외부 링크에서 추출해 승인한 수상·공연·활동·언론 중 고객 설득력이 높은 대표 근거입니다. 전달된 모든 career의 원래 index를 career 슬라이드에 한 번씩 배치하세요. extractedFacts와 PDF 텍스트는 소개와 제안 무대를 구체화하는 참고 근거로 사용하되, 자료를 나열하거나 사실에 없는 프로그램·성과·관객 반응·공연 시간·인원·장비를 만들지 마세요.\n\n최종 원고 원칙:\n- 화면에 보이는 모든 문장은 제안처에 그대로 전달할 최종 원고입니다. PHOTO BRIEF, VERIFIED, 이미지 준비, 사실 확인 필요, 내부 메모 같은 제작 지시를 절대 쓰지 않습니다. imagePurpose만 내부 배치 정보로 씁니다.\n- cover는 아티스트명과 '${String(body.profile.purpose || "행사")}'에 맞춘 분야·무대 제안을 한 줄로 씁니다. 수상명이나 경력명을 억지로 표지 문장에 붙이지 않습니다.\n- about은 tagline·introduction을 바탕으로 이 아티스트만의 무대 정체성을 설명합니다.\n- strengths 슬라이드는 정확히 1장 사용합니다. performanceDuration·castSize·technicalRequirements 중 확인된 값이 하나라도 있으면 제목을 '확인된 섭외 조건 요약'으로 쓰고, 확인된 항목을 '공연 시간 ·', '출연 인원 ·', '기술·장비 ·' 순서로 먼저 배치합니다. 남는 bullet만 '무대 구성 ·', '관객 경험 ·', '제안 범위 ·' 중 확인된 정보로 채웁니다. 조건이 전혀 없으면 기존 제안 무대 역할로 사용합니다.\n- gallery는 이미지와 연결되는 실제 공연명·기관·연도를 제목이나 본문에 씁니다. 사진이 무엇을 보여주는지 고객이 바로 이해해야 합니다.\n- career는 경력을 해석한 광고 문구가 아니라 '대표 무대와 공식 성과', '수상 및 선정 이력'처럼 빠르게 훑는 사실 페이지로 만듭니다.\n- contact 제목은 '가능 일정과 출연 조건을 확인해 보세요'처럼 다음 행동을 직접 요청합니다.\n- '검증된', '신뢰', '완성도', '전문성', '몰입도', '차별화', '최적'만으로 결론을 만들지 않습니다. 같은 가치 표현을 반복하지 않습니다.\n\n구성 규칙:\n- 정확히 ${targetPageCount}장의 slides를 반환합니다. 첫 장은 cover, 마지막 장은 contact입니다.\n- 같은 imageRefs ID를 두 슬라이드에 절대 반복하지 않습니다. 사진이 부족하면 imageRefs를 비웁니다.\n- 이미지가 2장 이상이면 about 슬라이드를 반드시 포함합니다. gallery 타입은 사진 갤러리가 아니라 한 가지 활동을 보여주는 '대표 장면'이며 정확히 ${requiredGallerySlides}장 사용합니다.\n- career 슬라이드는 정확히 ${requiredCareerSlides}장이며 한 장당 최대 6개입니다. careers의 원래 index ${JSON.stringify([...validFactIndexes])}를 중복·누락 없이 담습니다.\n- 모든 슬라이드는 근거가 되는 careerIndexes를 최소 1개 지정하되, 경력명을 모든 제목에 반복해서 넣지는 않습니다.\n- 사진은 배경이나 콜라주로 쓰지 않고 독립 프레임에 배치합니다. 사진은 자연스럽게 크롭하고, 포스터·그래픽은 전체를 표시합니다.\n- contact는 실제 연락처와 대표 영상 링크를 담습니다.\n- 텍스트가 길면 단어 중간을 자르지 말고 띄어쓰기 경계에서 줄바꿈합니다. 글자가 슬라이드 밖으로 나가는 것은 절대 금지입니다.\n\n슬라이드별 절대 분량 제한(한글·공백 포함):\n- cover: title 26자, body 42자, bullets 없음\n- about: title 32자, body 105자, bullets 최대 2개·각 30자\n- strengths: title 32자, body 없음, bullets 3개·각 34자\n- gallery: title 32자, body 42자, bullets 없음, 이미지 정확히 1개\n- career: title 32자, body·bullets 없음, 근거 최대 6개\n- contact: title 30자, body 60자, bullets 최대 2개·각 48자\n\n프로필 사실:\n${JSON.stringify(body.profile)}`,
     }];
-    parts.push({ text: "추가 절대 규칙: 여러 사진을 이어 붙인 콜라주·분할 화면·영상 썸네일 합성·저해상도 확대 이미지는 사용하지 마세요. 세로 인물사진과 포스터는 비율 보존 프레임을 사용하고, 고해상도 가로 무대사진만 텍스트 안전 영역과 어두운 오버레이가 있는 배경 후보로 허용합니다. 원본 파일명·사진 정리 문구·OCR 조각을 gallery 제목으로 사용하지 말고 고객이 이해할 수 있는 활동 의미로 다시 작성하세요." });
+    if (parts[0].text) {
+      parts[0].text = parts[0].text
+        .replace("about: title 32자, body 105자, bullets 최대 2개·각 30자", "about: title 32자, body 105자, bullets 최대 3개·각 38자")
+        .replace("사진은 배경이나 콜라주로 쓰지 않고 독립 프레임에 배치합니다.", "사진은 기본적으로 독립 프레임에 배치하고, 고해상도 가로 무대사진만 배경으로 허용합니다.");
+    }
+    parts.push({ text: "추가 절대 규칙: about에는 소개문을 반복하지 말고 실제 수상·대표 공연·방송 등 가장 강한 근거 3개를 bullets로 배치하세요. strengths에는 추출된 repertoire와 program_configuration이 있으면 고객이 선택할 수 있는 대표 레퍼토리와 무대 구성으로 우선 사용하세요. 여러 사진을 이어 붙인 콜라주·분할 화면·영상 썸네일 합성은 인물사진이나 배경으로 사용하지 마세요. 단, 동일 아티스트의 공연·포스터 이력을 정리한 고해상도 history 또는 poster 자산은 경력 증빙 페이지의 비율 보존 프레임에서 한 번 사용할 수 있습니다. 저해상도 이미지는 전체 화면으로 확대하지 마세요. 세로 인물사진과 포스터는 비율 보존 프레임을 사용하고, 고해상도 가로 무대사진만 텍스트 안전 영역과 어두운 오버레이가 있는 배경 후보로 허용합니다. 원본 파일명·사진 정리 문구·OCR 조각을 gallery 제목으로 사용하지 말고 고객이 이해할 수 있는 활동 의미로 다시 작성하세요." });
 
     assets.forEach((asset) => {
       const match = asset.dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);

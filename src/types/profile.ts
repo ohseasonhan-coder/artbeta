@@ -30,6 +30,8 @@ export interface ExtractedItem {
     | "performance_duration"
     | "cast_size"
     | "technical_requirement"
+    | "repertoire"
+    | "program_configuration"
     | "strength"
     | "region";
   label: string;

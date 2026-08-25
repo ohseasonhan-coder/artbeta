@@ -167,7 +167,7 @@ async function classifyDocumentVisuals(pages: PdfPageAsset[], artistName: string
             && classification.role !== "exclude"
             && classification.relevanceScore >= 0.68
             && classification.qualityScore >= 0.68
-            && (visual.kind === "photo" ? Math.min(visual.width, visual.height) >= 650 && Math.max(visual.width, visual.height) >= 1000 : Math.min(visual.width, visual.height) >= 600 && Math.max(visual.width, visual.height) >= 800),
+            && (visual.kind === "photo" ? Math.min(visual.width, visual.height) >= 420 && Math.max(visual.width, visual.height) >= 720 : Math.min(visual.width, visual.height) >= 500 && Math.max(visual.width, visual.height) >= 700),
         };
       });
       return { ...page, selected: page.selected || Boolean(extractedVisuals?.some((visual) => visual.selected)), extractedVisuals };
