@@ -51,6 +51,7 @@ export interface DeckExportResult {
   mode: "ai" | "local";
   provider: string;
   model: string;
+  promptVersion?: string;
   slideCount: number;
   qualityScore?: number;
   qualityIssues?: string[];
@@ -258,7 +259,7 @@ function enforceDeckSafety(plan: DeckPlan): DeckPlan {
       usedImages.add(id);
       return true;
     }).slice(0, 1),
-    careerIndexes: [...new Set(slide.careerIndexes)].slice(0, 6),
+    careerIndexes: [...new Set(slide.careerIndexes)].slice(0, slide.type === "career" ? 5 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0),
   }));
   return { ...plan, slides };
 }
@@ -336,7 +337,7 @@ function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
     title: compactText(slide.title, slide.imageRefs.length && ["about", "contact"].includes(slide.type) ? Math.min(title, 22) : title),
     body: compactText(slide.body, body),
     bullets: slide.bullets.slice(0, bulletCount).map((item) => compactText(item, bulletLength)),
-    careerIndexes: slide.careerIndexes.slice(0, 6),
+    careerIndexes: slide.careerIndexes.slice(0, slide.type === "career" ? 5 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0),
     imageRefs: slide.imageRefs.slice(0, 1),
   };
 }
@@ -362,7 +363,7 @@ function selectProposalFactIndexes(facts: ReturnType<typeof buildDeckFacts>, lim
 }
 
 function factLimitForPageCount(pageCount: number) {
-  return pageCount >= 12 ? 24 : pageCount >= 10 ? 18 : pageCount >= 8 ? 14 : 10;
+  return pageCount >= 12 ? 25 : pageCount >= 10 ? 20 : 10;
 }
 
 function factLabel(fact?: DeckFact, max = 24) {
@@ -539,6 +540,8 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
   if (coverIndex < 0) slides.unshift({ type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: [], imagePurpose: "대표사진", careerIndexes: [], layout: "split_right" });
   const normalizedCoverIndex = slides.findIndex((slide) => slide.type === "cover");
   const available = [...assets];
+  const careerSlideCount = slides.filter((slide) => slide.type === "career" && slide.careerIndexes.length).length;
+  const desiredGalleryCount = Math.min(5, Math.max(0, profile.pageCount - 4 - careerSlideCount));
   const preferredRoles: Record<DeckSlidePlan["type"], ProfileVisualRole[]> = {
     cover: ["portrait", "stage", "other"],
     about: ["stage", "portrait", "other"],
@@ -549,7 +552,9 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
   };
   const takeAsset = (type: DeckSlidePlan["type"]) => {
     for (const role of preferredRoles[type]) {
-      const index = available.findIndex((asset) => (asset.visualRole || "other") === role);
+      const remainingStageCount = available.filter((asset) => asset.visualRole === "stage" && asset.visualType !== "graphic").length;
+      const index = available.findIndex((asset) => (asset.visualRole || "other") === role
+        && (role !== "stage" || type === "gallery" || remainingStageCount > desiredGalleryCount));
       if (index >= 0) return available.splice(index, 1)[0];
     }
     return undefined;
@@ -572,8 +577,6 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
     primaryAboutIndex = aboutIndex;
   }
 
-  const careerSlideCount = slides.filter((slide) => slide.type === "career" && slide.careerIndexes.length).length;
-  const desiredGalleryCount = Math.min(5, Math.max(0, profile.pageCount - 4 - careerSlideCount));
   const requiredGalleryAssets = available.filter((asset) => asset.visualRole === "stage" && asset.visualType !== "graphic").slice(0, desiredGalleryCount);
   const requiredGalleryIds = new Set(requiredGalleryAssets.map((asset) => asset.id));
   for (let index = available.length - 1; index >= 0; index -= 1) {
@@ -690,7 +693,7 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
     error.code = details?.code;
     throw error;
   }
-  return response.json() as Promise<{ plan: DeckPlan; mode: "ai"; provider: string; model: string; qualityScore?: number; coveredFactCount?: number; totalFactCount?: number }>;
+  return response.json() as Promise<{ plan: DeckPlan; mode: "ai"; provider: string; model: string; promptVersion?: string; qualityScore?: number; coveredFactCount?: number; totalFactCount?: number }>;
 }
 
 export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: DeckPlan; meta: DeckPlanMeta }> {
@@ -701,7 +704,7 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
     const safePlan = enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) });
     const finalPlan = normalizeNarrativeStructure(safePlan, profile);
     const quality = auditDeckQuality(finalPlan, profile, assets);
-    return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: quality.score, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks: quality.checks, qualityIssues: quality.issues } };
+    return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, promptVersion: result.promptVersion, qualityScore: quality.score, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks: quality.checks, qualityIssues: quality.issues } };
   } catch (error) {
     const failure = error as Error & { code?: string };
     const coveredLocalPlan = ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(fallbackPlan(profile, assets), profile), assets, profile), profile);
@@ -859,7 +862,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       addEyebrow(slide, slidePlan.eyebrow);
       slide.addText(wrapTextAtWords(slidePlan.title, primaryImage ? 17 : 25, 2), { x: 0.78, y: 1.16, w: primaryImage ? 7.25 : 11.35, h: 0.82, fontSize: primaryImage ? 35 : 38, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
-      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 6);
+      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 5);
       selected.forEach((item, index) => {
         const display = formatCareerFact(item, false);
         const columns = primaryImage || selected.length <= 3 ? 1 : 2;

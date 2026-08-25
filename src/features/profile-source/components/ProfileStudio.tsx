@@ -772,7 +772,7 @@ export default function ProfileStudio() {
     try {
       const result = await downloadPptx(profile);
       setNotice(result.mode === "ai"
-        ? `${result.provider} · ${result.model}이 사진을 선별하고 ${result.slideCount}페이지 PPTX를 구성했어요. 최종 품질검사 ${result.qualityScore ?? 0}점${result.qualityIssues?.length ? ` · 확인 필요 ${result.qualityIssues.length}건` : " · 모든 필수 검사 통과"}.`
+        ? `${result.provider} · ${result.model}${result.promptVersion ? ` · 기획 규칙 ${result.promptVersion}` : ""} 사용 · 사진을 선별하고 ${result.slideCount}페이지 PPTX를 구성했어요. 최종 품질검사 ${result.qualityScore ?? 0}점${result.qualityIssues?.length ? ` · 확인 필요 ${result.qualityIssues.length}건` : " · 모든 필수 검사 통과"}.`
         : `AI 기획을 사용할 수 없어 기본 구성으로 ${result.slideCount}페이지 PPTX를 만들었어요.`);
     } catch (error) {
       setNotice(error instanceof Error ? `PPTX 다운로드 실패 · ${error.message}` : "PPTX 제작 중 문제가 생겼습니다. 이미지 용량을 줄이거나 잠시 후 다시 시도해 주세요.");
@@ -831,7 +831,7 @@ export default function ProfileStudio() {
       const prepared = await prepareDeckPlan(workingProfile);
       setProfile({ ...workingProfile, deckPlan: prepared.plan, deckPlanMeta: prepared.meta });
       setNotice(prepared.meta.mode === "ai"
-        ? `${prepared.meta.provider} · ${prepared.meta.model}이 자료량에 맞춰 ${prepared.plan.slides.length}페이지를 구성했어요.${addedWebImageCount ? ` 검수된 웹 사진 ${addedWebImageCount}장 자동 추가 ·` : ""} 품질 검사 ${prepared.meta.qualityScore ?? 0}점 · 목적별 경력 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영 · 사진 반복과 텍스트 이탈 금지 적용.`
+        ? `${prepared.meta.provider} · ${prepared.meta.model}${prepared.meta.promptVersion ? ` · 기획 규칙 ${prepared.meta.promptVersion}` : ""} 사용 · 자료량에 맞춰 ${prepared.plan.slides.length}페이지를 구성했어요.${addedWebImageCount ? ` 검수된 웹 사진 ${addedWebImageCount}장 자동 추가 ·` : ""} 품질 검사 ${prepared.meta.qualityScore ?? 0}점 · 목적별 경력 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영 · 사진 반복과 텍스트 이탈 금지 적용.`
         : `${prepared.meta.warning || "Gemini 기획을 완료하지 못했습니다."} 기본 페이지 구성으로 미리보기를 만들었어요. (오류 코드: ${prepared.meta.errorCode || "DECK_PLANNING_FAILED"})`);
       setStep(2);
     } catch {
