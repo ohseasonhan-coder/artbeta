@@ -1,6 +1,7 @@
 import { GoogleGenAI, type Part } from "@google/genai";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { bookingConditionBullets, hasConfirmedBookingConditions } from "@/features/profile-export/pptx/booking-conditions";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -117,21 +118,17 @@ function purposeFactPriority(fact: FactInput, purpose: string) {
 }
 
 function proposalBullets(profile: Record<string, unknown>) {
+  const confirmedConditions = bookingConditionBullets(profile);
+  if (confirmedConditions.length) return confirmedConditions;
   const strengths = Array.isArray(profile.strengths) ? profile.strengths.map(String).filter(Boolean) : [];
   const generatedStrengths = Array.isArray(profile.generatedStrengths) ? profile.generatedStrengths.map(String).filter(Boolean) : [];
   const strength = generatedStrengths[0] || strengths[0] || String(profile.tagline || "");
-  const technicalRequirements = Array.isArray(profile.technicalRequirements) ? profile.technicalRequirements.map(String).filter(Boolean) : [];
-  const bookingConditions = [
-    profile.performanceDuration ? `공연 시간 · ${String(profile.performanceDuration)}` : "",
-    profile.castSize ? `출연 인원 · ${String(profile.castSize)}` : "",
-    technicalRequirements.length ? `기술·장비 · ${technicalRequirements.join(" · ")}` : "",
-  ].filter(Boolean);
   const proposal = [
-    `무대 구성 · ${[profile.primaryField, profile.secondaryField, profile.members].filter(Boolean).join(" · ")}`,
+    `무대 구성 · ${[profile.primaryField, profile.secondaryField].filter(Boolean).join(" · ")}`,
     strength ? `관객 경험 · ${strength}` : "",
     `제안 범위 · ${[profile.purpose, profile.region].filter(Boolean).join(" · ")}`,
   ].filter((item) => item && !item.endsWith("· "));
-  return [...bookingConditions, ...proposal].map((item) => compactText(item, 48)).slice(0, 3);
+  return proposal.map((item) => compactText(item, 48)).slice(0, 3);
 }
 
 function evidenceTokens(fact?: FactInput) {
@@ -269,7 +266,7 @@ export async function POST(request: Request) {
     if (about && body.profile.tagline) about.title = String(body.profile.tagline);
     const proposal = plan.slides.find((slide) => slide.type === "strengths");
     if (proposal) {
-      const hasBookingConditions = Boolean(body.profile.performanceDuration || body.profile.castSize || Array.isArray(body.profile.technicalRequirements) && body.profile.technicalRequirements.length);
+      const hasBookingConditions = hasConfirmedBookingConditions(body.profile);
       proposal.eyebrow = hasBookingConditions ? "섭외 조건" : "제안 무대";
       proposal.title = hasBookingConditions ? "확인된 섭외 조건 요약" : purposeTitle;
       proposal.body = "";

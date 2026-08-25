@@ -11,6 +11,7 @@ import { designTemplates, getTemplate, recommendTemplateKey } from "@/features/d
 import { FILE_LIMITS } from "@/config/file-limits";
 import { collectDeckAssets, downloadPptx, getDeckAssetData, isYouTubeVideoUrl, makeImageThumbnail, normalizeVideoUrl, prepareDeckPlan, selectPortfolioAssets } from "@/features/profile-export/pptx/generate-pptx";
 import { buildDeckFacts, formatCareerFact, formatCustomerValueEvidence } from "@/features/profile-export/pptx/deck-facts";
+import { hasConfirmedBookingConditions, normalizeCastSize, normalizedBookingConditions, normalizePerformanceDuration, normalizeTechnicalRequirements } from "@/features/profile-export/pptx/booking-conditions";
 import { clearProfileDraft, loadProfileDraft, saveProfileDraft } from "@/features/profile-source/services/draft-storage";
 import { analyzePdfInBrowser } from "@/features/pdf-import/services/analyze-pdf-browser";
 import { inferItemsFromText } from "@/features/pdf-import/parsers/extract-items";
@@ -233,11 +234,12 @@ function mergeExtractedItems(...groups: ExtractedItem[][]) {
 }
 
 function bookingConditionFromItems(items: ExtractedItem[], type: "performance_duration" | "cast_size") {
-  return items.find((item) => item.type === type && item.status !== "excluded")?.value || "";
+  const value = items.find((item) => item.type === type && item.status !== "excluded")?.value || "";
+  return type === "performance_duration" ? normalizePerformanceDuration(value) : normalizeCastSize(value);
 }
 
 function technicalConditionsFromItems(items: ExtractedItem[]) {
-  return [...new Set(items.filter((item) => item.type === "technical_requirement" && item.status !== "excluded").map((item) => item.value.trim()).filter(Boolean))].slice(0, 4);
+  return normalizeTechnicalRequirements(items.filter((item) => item.type === "technical_requirement" && item.status !== "excluded").map((item) => item.value));
 }
 
 function toggleInList(list: string[], value: string, limit = 99) {
@@ -277,7 +279,11 @@ export default function ProfileStudio() {
 
   useEffect(() => {
     void loadProfileDraft()
-      .then((saved) => { if (saved) setProfile({ ...initialProfile, ...saved }); })
+      .then((saved) => {
+        if (!saved) return;
+        const merged = { ...initialProfile, ...saved };
+        setProfile({ ...merged, ...normalizedBookingConditions(merged) });
+      })
       .catch(() => { /* 새 초안으로 계속 진행 */ });
   }, []);
 
@@ -340,9 +346,9 @@ export default function ProfileStudio() {
         contact: aiProfile?.contacts.join(" · ") || current.contact,
         officialUrl: aiProfile?.socialLinks[0] || current.officialUrl,
         videoUrl: aiProfile?.socialLinks.find((link) => isYouTubeVideoUrl(link)) || current.videoUrl,
-        performanceDuration: aiProfile?.performanceDuration || bookingConditionFromItems(finalItems, "performance_duration") || current.performanceDuration,
-        castSize: aiProfile?.castSize || bookingConditionFromItems(finalItems, "cast_size") || (aiProfile?.members.length ? `${aiProfile.members.length}인 구성` : "") || current.castSize,
-        technicalRequirements: aiProfile?.technicalRequirements?.length ? aiProfile.technicalRequirements : technicalConditionsFromItems(finalItems).length ? technicalConditionsFromItems(finalItems) : current.technicalRequirements,
+        performanceDuration: normalizePerformanceDuration(aiProfile?.performanceDuration || bookingConditionFromItems(finalItems, "performance_duration") || current.performanceDuration),
+        castSize: normalizeCastSize(aiProfile?.castSize || bookingConditionFromItems(finalItems, "cast_size") || current.castSize),
+        technicalRequirements: normalizeTechnicalRequirements(aiProfile?.technicalRequirements?.length ? aiProfile.technicalRequirements : technicalConditionsFromItems(finalItems).length ? technicalConditionsFromItems(finalItems) : current.technicalRequirements),
         introduction: aiProfile?.introduction || current.introduction,
         tagline: aiProfile?.tagline || current.tagline,
         generatedStrengths: aiProfile?.strengths || current.generatedStrengths,
@@ -459,9 +465,9 @@ export default function ProfileStudio() {
         members: aiProfile?.members.join(", ") || current.members,
         contact: aiProfile?.contacts.join(" · ") || current.contact,
         videoUrl: aiProfile?.socialLinks[0] || current.videoUrl,
-        performanceDuration: aiProfile?.performanceDuration || bookingConditionFromItems(finalItems, "performance_duration") || current.performanceDuration,
-        castSize: aiProfile?.castSize || bookingConditionFromItems(finalItems, "cast_size") || (aiProfile?.members.length ? `${aiProfile.members.length}인 구성` : "") || current.castSize,
-        technicalRequirements: aiProfile?.technicalRequirements?.length ? aiProfile.technicalRequirements : technicalConditionsFromItems(finalItems).length ? technicalConditionsFromItems(finalItems) : current.technicalRequirements,
+        performanceDuration: normalizePerformanceDuration(aiProfile?.performanceDuration || bookingConditionFromItems(finalItems, "performance_duration") || current.performanceDuration),
+        castSize: normalizeCastSize(aiProfile?.castSize || bookingConditionFromItems(finalItems, "cast_size") || current.castSize),
+        technicalRequirements: normalizeTechnicalRequirements(aiProfile?.technicalRequirements?.length ? aiProfile.technicalRequirements : technicalConditionsFromItems(finalItems).length ? technicalConditionsFromItems(finalItems) : current.technicalRequirements),
         introduction: aiProfile?.introduction || current.introduction,
         tagline: aiProfile?.tagline || current.tagline,
         generatedStrengths: aiProfile?.strengths || current.generatedStrengths,
@@ -701,9 +707,9 @@ export default function ProfileStudio() {
           contact: current.contact || aiProfile?.contacts.join(" · ") || "",
           officialUrl: current.officialUrl || profileLinks[0] || "",
           videoUrl: current.videoUrl || (videoLinks[0] ? normalizeVideoUrl(videoLinks[0]) : "") || aiProfile?.socialLinks.find(isYouTubeVideoUrl) || "",
-          performanceDuration: current.performanceDuration || aiProfile?.performanceDuration || bookingConditionFromItems(finalItems, "performance_duration"),
-          castSize: current.castSize || aiProfile?.castSize || bookingConditionFromItems(finalItems, "cast_size") || (aiProfile?.members.length ? `${aiProfile.members.length}인 구성` : ""),
-          technicalRequirements: current.technicalRequirements.length ? current.technicalRequirements : aiProfile?.technicalRequirements?.length ? aiProfile.technicalRequirements : technicalConditionsFromItems(finalItems),
+          performanceDuration: normalizePerformanceDuration(current.performanceDuration || aiProfile?.performanceDuration || bookingConditionFromItems(finalItems, "performance_duration")),
+          castSize: normalizeCastSize(current.castSize || aiProfile?.castSize || bookingConditionFromItems(finalItems, "cast_size")),
+          technicalRequirements: normalizeTechnicalRequirements(current.technicalRequirements.length ? current.technicalRequirements : aiProfile?.technicalRequirements?.length ? aiProfile.technicalRequirements : technicalConditionsFromItems(finalItems)),
           introduction: current.introduction || aiProfile?.introduction || "",
           tagline: current.tagline || aiProfile?.tagline || "",
           generatedStrengths: current.generatedStrengths.length ? current.generatedStrengths : aiProfile?.strengths || [],
@@ -901,7 +907,7 @@ function QuickReviewStep({ profile, update, setProfile, uploadImage, busy, notic
   const priorityIds = new Set(priorityRepresentatives.map((item) => item.id));
   const representativeItems = [...priorityRepresentatives, ...reviewItems.filter((item) => !priorityIds.has(item.id))].slice(0, 3);
   const visualCount = profile.performanceImages.filter(Boolean).length + (profile.representativeImage ? 1 : 0) + profile.pdfPageAssets.flatMap((page) => page.extractedVisuals ?? []).filter((visual) => visual.selected).length;
-  const hasBookingConditions = Boolean(profile.performanceDuration || profile.castSize || profile.technicalRequirements.length);
+  const hasBookingConditions = hasConfirmedBookingConditions(profile);
   const setItemStatus = (id: string, status: ExtractedItem["status"]) => update("extractedItems", profile.extractedItems.map((item) => item.id === id ? { ...item, status } : item));
 
   return <section className="stage quick-review-stage">

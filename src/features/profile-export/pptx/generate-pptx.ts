@@ -1,6 +1,7 @@
 import { DeckPlan, DeckPlanMeta, DeckQualityCheck, DeckSlidePlan, ProfileData, ProfileVisualRole } from "@/types/profile";
 import { getTemplate } from "@/features/design-templates/registry/templates";
 import { buildDeckFacts, formatCareerFact, formatCustomerValueEvidence, rankDeckFactIndexes, type DeckFact } from "./deck-facts";
+import { bookingConditionBullets, hasConfirmedBookingConditions } from "./booking-conditions";
 
 const hex = (value: string) => value.replace("#", "");
 
@@ -280,18 +281,29 @@ function careerSlideTitle(facts: DeckFact[]) {
 }
 
 function proposalBullets(profile: ProfileData) {
+  const confirmedConditions = bookingConditionBullets(profile);
+  if (confirmedConditions.length) return confirmedConditions;
   const strength = (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths)[0] || profile.tagline;
-  const bookingConditions = [
-    profile.performanceDuration ? `공연 시간 · ${profile.performanceDuration}` : "",
-    profile.castSize ? `출연 인원 · ${profile.castSize}` : "",
-    profile.technicalRequirements.length ? `기술·장비 · ${profile.technicalRequirements.join(" · ")}` : "",
-  ].filter(Boolean);
   const proposal = [
-    `무대 구성 · ${[profile.primaryField, profile.secondaryField, profile.members].filter(Boolean).join(" · ")}`,
+    `무대 구성 · ${[profile.primaryField, profile.secondaryField].filter(Boolean).join(" · ")}`,
     strength ? `관객 경험 · ${strength}` : "",
     `제안 범위 · ${[profile.purpose, profile.region].filter(Boolean).join(" · ")}`,
   ].filter((item) => !item.endsWith("· "));
-  return [...bookingConditions, ...proposal].map((item) => compactText(item, 48)).slice(0, 3);
+  return proposal.map((item) => compactText(item, 48)).slice(0, 3);
+}
+
+function synchronizeProposalSlide(plan: DeckPlan, profile: ProfileData): DeckPlan {
+  const bookingMode = hasConfirmedBookingConditions(profile);
+  return {
+    ...plan,
+    slides: plan.slides.map((slide) => slide.type === "strengths" ? {
+      ...slide,
+      eyebrow: bookingMode ? "섭외 조건" : "제안 무대",
+      title: bookingMode ? "확인된 섭외 조건 요약" : compactText(`${profile.purpose || "행사"}에 맞춘 ${profile.primaryField || "문화예술"} 무대`, 32),
+      body: "",
+      bullets: proposalBullets(profile),
+    } : slide),
+  };
 }
 
 function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
@@ -303,8 +315,8 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   const visualAssets = assets;
   const slides: DeckSlidePlan[] = [
     { type: "cover", eyebrow: "아티스트 섭외 제안", title: profile.artistName || "ARTIST", body: purposeTitle, bullets: [], imageRefs: visualAssets[0] ? [visualAssets[0].id] : [], imagePurpose: "얼굴과 분위기가 선명한 세로 대표사진 · 반신 또는 전신", careerIndexes: evidenceAt(0), layout: "split_right" },
-    { type: "about", eyebrow: "아티스트 소개", title: compactText(profile.tagline || `${profile.primaryField}로 만드는 무대`, 32), body: compactText(profile.introduction, 105), bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean).slice(0, 2), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: evidenceAt(1), layout: "split_right" },
-    { type: "strengths", eyebrow: profile.performanceDuration || profile.castSize || profile.technicalRequirements.length ? "섭외 조건" : "제안 무대", title: profile.performanceDuration || profile.castSize || profile.technicalRequirements.length ? "확인된 섭외 조건 요약" : purposeTitle, body: "", bullets: proposalBullets(profile), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
+    { type: "about", eyebrow: "아티스트 소개", title: compactText(profile.tagline || `${profile.primaryField}로 만드는 무대`, 32), body: compactText(profile.introduction, 105), bullets: [profile.primaryField, profile.region].filter(Boolean).slice(0, 2), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: evidenceAt(1), layout: "split_right" },
+    { type: "strengths", eyebrow: hasConfirmedBookingConditions(profile) ? "섭외 조건" : "제안 무대", title: hasConfirmedBookingConditions(profile) ? "확인된 섭외 조건 요약" : purposeTitle, body: "", bullets: proposalBullets(profile), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
   ];
   const galleryAssets = visualAssets.slice(2, 4);
   galleryAssets.forEach((asset, index) => {
@@ -468,14 +480,14 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
   const assets = selectPortfolioAssets(collectDeckAssets(profile), 24);
   try {
     const result = await requestDeckPlan(profile, assets);
-    const coveredPlan = ensureEvidenceCoverage(ensureVisualCoverage(result.plan, assets, profile), profile);
+    const coveredPlan = ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(result.plan, profile), assets, profile), profile);
     const safePlan = enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) });
     const finalPlan = normalizeNarrativeStructure(safePlan, profile);
     const quality = auditDeckQuality(finalPlan, profile, assets);
     return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, qualityScore: quality.score, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks: quality.checks, qualityIssues: quality.issues } };
   } catch (error) {
     const failure = error as Error & { code?: string };
-    const localPlan = normalizeNarrativeStructure(fallbackPlan(profile, assets), profile);
+    const localPlan = normalizeNarrativeStructure(synchronizeProposalSlide(fallbackPlan(profile, assets), profile), profile);
     const quality = auditDeckQuality(localPlan, profile, assets);
     return {
       plan: localPlan,
@@ -502,7 +514,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const prepared = profile.deckPlan && profile.deckPlanMeta
     ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
     : await prepareDeckPlan(profile);
-  const coveredPlan = ensureEvidenceCoverage(ensureVisualCoverage(prepared.plan, assets, profile), profile);
+  const coveredPlan = ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(prepared.plan, profile), assets, profile), profile);
   const plan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides).map(fitSlideCopy) }), profile);
   const exportMeta = prepared.meta;
   const deckFacts = buildDeckFacts(profile);
@@ -654,14 +666,14 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     if (slidePlan.type === "strengths") {
       const showsBookingConditions = slidePlan.bullets.some((item) => /^(공연 시간|출연 인원|기술·장비)\s*·/.test(item));
       addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(oneLineText(slidePlan.title, 26), { x: 0.78, y: 1.1, w: primaryImage ? 7.2 : 11.4, h: 0.75, fontSize: 35, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(oneLineText(slidePlan.title, 26), { x: 0.78, y: 0.96, w: primaryImage ? 7.2 : 11.4, h: 1.05, fontSize: primaryImage ? 32 : 35, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const bullets = slidePlan.bullets.length ? slidePlan.bullets : profile.generatedStrengths;
       bullets.slice(0, 3).forEach((item, index) => {
-        const y = 2.35 + index * 1.35;
+        const y = 2.3 + index * 1.35;
         slide.addText(`0${index + 1}`, { x: 0.82, y, w: 0.55, h: 0.35, fontSize: 15, bold: true, color: hex(p.accent), margin: 0 });
         slide.addShape(pptx.ShapeType.line, { x: 1.52, y: y + 0.16, w: 0.65, h: 0, line: { color: hex(p.accent), width: 1.2 } });
-        slide.addText(wrapTextAtWords(item, primaryImage ? 26 : 42, 2), { x: 2.42, y: y - 0.12, w: primaryImage ? 5.55 : 8.6, h: 0.65, fontSize: primaryImage ? 21 : 23, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+        slide.addText(wrapTextAtWords(item, primaryImage ? 24 : 40, 2), { x: 2.42, y: y - 0.15, w: primaryImage ? 5.55 : 8.6, h: 0.78, fontSize: primaryImage ? 19 : 22, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
         const proofFact = showsBookingConditions ? undefined : deckFacts[slidePlan.careerIndexes[index] ?? slidePlan.careerIndexes[0]];
         if (proofFact) {
           slide.addText(oneLineText(formatCustomerValueEvidence(proofFact, profile.purpose), 76), { x: 2.42, y: y + 0.58, w: primaryImage ? 5.55 : 8.6, h: 0.24, fontSize: 9, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });

@@ -5,6 +5,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import type { ResponseInputContent } from "openai/resources/responses/responses";
 import { z } from "zod";
 import { ExtractedItem, PdfPageAsset } from "@/types/profile";
+import { normalizedBookingConditions } from "@/features/profile-export/pptx/booking-conditions";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -158,6 +159,11 @@ export async function POST(request: Request) {
       profile = await analyzeWithOpenAI(prompt, pages);
       provider = "openai";
     }
+    profile = {
+      ...profile,
+      members: profile.members.filter((value) => value.length <= 40 && !/듀엣|트리오|혼성\s*그룹|여성\s*그룹|남성\s*그룹|장르|뮤지컬|대중가요|퓨전국악|전자현악/i.test(value)),
+      ...normalizedBookingConditions(profile),
+    };
 
     const items: ExtractedItem[] = [];
     if (profile.artistName) items.push(makeItem("artist_name", "활동명", profile.artistName));
