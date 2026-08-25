@@ -117,6 +117,19 @@ const makeItem = (
   status: confidence < 0.7 ? "needs_review" : "approved",
 });
 
+function uniqueFactParts(values: string[]) {
+  const result: string[] = [];
+  values.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean).forEach((value) => {
+    const normalized = value.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+    const duplicate = result.some((existing) => {
+      const existingNormalized = existing.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+      return normalized === existingNormalized || Math.min(normalized.length, existingNormalized.length) >= 5 && (normalized.includes(existingNormalized) || existingNormalized.includes(normalized));
+    });
+    if (!duplicate) result.push(value);
+  });
+  return result;
+}
+
 export async function POST(request: Request) {
   if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
     return NextResponse.json({ error: "AI API 키가 설정되지 않았습니다.", code: "AI_NOT_CONFIGURED" }, { status: 503 });
@@ -186,7 +199,7 @@ export async function POST(request: Request) {
     profile.programConfigurations.forEach((value) => items.push(makeItem("program_configuration", "선택 가능한 무대 구성", value, 0.86)));
     profile.facts.forEach((fact) => {
       const labels = { career: "연혁·경력", performance: "공연·활동", award: "수상·선정", media: "방송·언론" } as const;
-      const value = [fact.date, fact.title, fact.organization, fact.location, fact.description].filter(Boolean).join(" · ");
+      const value = uniqueFactParts([fact.date, fact.title, fact.organization, fact.location, fact.description]).join(" · ");
       items.push(makeItem(fact.category, labels[fact.category], value, fact.confidence, fact.pageNumber));
     });
 

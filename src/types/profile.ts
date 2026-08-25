@@ -89,7 +89,7 @@ export interface ExternalImageAsset {
 
 export type ProfileVisualRole = "portrait" | "stage" | "poster" | "history" | "other" | "exclude";
 
-export type DeckSlideType = "cover" | "about" | "strengths" | "gallery" | "career" | "contact";
+export type DeckSlideType = "cover" | "about" | "strengths" | "program" | "team" | "gallery" | "career" | "contact";
 export type DeckLayout = "full_bleed" | "split_left" | "split_right" | "editorial" | "timeline" | "gallery";
 
 export interface DeckSlidePlan {

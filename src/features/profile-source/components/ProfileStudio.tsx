@@ -203,7 +203,7 @@ const photoMenuGuides: Array<{ number: number; title: string; description: strin
 
 function normalizeField(value: string) {
   const keywordMap: Array<[string, string]> = [
-    ["보컬|가수|성악|노래", "보컬"], ["연주|밴드|악기|오케스트라", "연주"], ["국악|판소리|민요", "국악"],
+    ["보컬|가수|성악|노래|팝페라|오페라|뮤지컬", "보컬"], ["연주|밴드|악기|오케스트라", "연주"], ["국악|판소리|민요", "국악"],
     ["무용|댄스|춤", "무용"], ["마술|매직", "마술"], ["MC|사회|진행", "진행·MC"], ["전통", "전통예술"],
     ["퍼포먼스|공연", "퍼포먼스"], ["복합|융복합", "복합예술"],
   ];
@@ -1236,6 +1236,8 @@ function PreviewStep({ profile, template, busy, notice, onEdit, onRetry, onDownl
       return <div className="ai-preview-slide ai-gallery single" key={planIndex}><div className="ai-gallery-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2>{plan.body && <p>{plan.body}</p>}</div>{images[0] ? <img src={images[0]} alt="대표 활동 장면" /> : factVisual()}{evidence}</div>;
     }
     if (plan.type === "strengths") return <div className="ai-preview-slide ai-strengths ai-visual-split" key={planIndex}><div className="ai-visual-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><div>{plan.bullets.slice(0, 3).map((item, index) => <article key={index}><small>0{index + 1}</small><strong>{item}</strong></article>)}</div></div>{images[0] ? <img src={images[0]} alt="제안 무대 활동 이미지" /> : factVisual()}{evidence}</div>;
+    if (plan.type === "program") return <div className="ai-preview-slide ai-strengths ai-visual-split" key={planIndex}><div className="ai-visual-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><p>{plan.body}</p><div>{plan.bullets.slice(0, 6).map((item, index) => <article key={index}><small>{String(index + 1).padStart(2, "0")}</small><strong>{item}</strong></article>)}</div></div>{images[0] ? <img src={images[0]} alt="공연 프로그램 활동 이미지" /> : factVisual()}</div>;
+    if (plan.type === "team") return <div className="ai-preview-slide ai-strengths ai-visual-split" key={planIndex}><div className="ai-visual-copy"><span>{plan.eyebrow}</span><h2>{plan.title}</h2><p>{plan.body}</p><div>{plan.bullets.slice(0, 4).map((item, index) => <article key={index}><small>{String(index + 1).padStart(2, "0")}</small><strong>{item}</strong></article>)}</div></div>{images[0] ? <img src={images[0]} alt="출연 구성 활동 이미지" /> : factVisual()}</div>;
     if (plan.type === "career") {
       const visibleCareers = careers.slice(0, 10);
       const twoColumns = visibleCareers.length > 5;

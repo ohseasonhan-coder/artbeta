@@ -8,6 +8,20 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+async function withGeminiAvailabilityRetry<T>(operation: () => Promise<T>) {
+  const delays = [700, 1600];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
+      const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      if (attempt >= delays.length || status !== 503 && !message.includes("unavailable") && !message.includes("high demand")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 type Source = "naver" | "google" | "youtube" | "wikimedia";
 
 interface Candidate {
@@ -220,11 +234,11 @@ export async function POST(request: Request) {
         if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
       });
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
+      const response = await withGeminiAvailabilityRetry(() => ai.models.generateContent({
         model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
         contents: [{ role: "user", parts }],
         config: { responseMimeType: "application/json", responseJsonSchema: z.toJSONSchema(matchSchema), temperature: 0.1 },
-      });
+      }));
       const parsed = matchSchema.parse(JSON.parse(response.text || "{}"));
       scores = new Map(parsed.matches.map((match) => [match.id, match]));
       } catch (error) {
