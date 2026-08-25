@@ -227,35 +227,22 @@ function factLabel(fact?: DeckFact, max = 24) {
   return compactText(formatCareerFact(fact, true).title, max);
 }
 
-function factDrivenClaim(fact: DeckFact | undefined, fallback: string) {
-  if (!fact) return fallback;
-  const label = factLabel(fact, 22);
-  const suffix = fact.category === "award"
-    ? "성과로 확인된 아티스트"
-    : fact.category === "performance"
-      ? "무대 경험을 이어갑니다"
-      : fact.category === "media"
-        ? "기록으로 만나는 아티스트"
-        : "활동을 이어온 아티스트";
-  return compactText(`${label}, ${suffix}`, 32);
-}
-
-function factDrivenBullet(fact: DeckFact) {
-  const label = factLabel(fact, 20);
-  const value = fact.category === "award"
-    ? "공식 수상·선정"
-    : fact.category === "performance"
-      ? "대표 무대 경험"
-      : fact.category === "media"
-        ? "방송·언론 기록"
-        : "주요 협업 경험";
-  return compactText(`${label} · ${value}`, 34);
-}
-
 function careerSlideTitle(facts: DeckFact[]) {
-  const first = facts[0];
-  if (!first) return "주요 활동과 성과";
-  return compactText(`${factLabel(first, 23)}를 포함한 주요 활동`, 32);
+  const categories = new Set(facts.map((fact) => fact.category));
+  if (categories.has("award") && categories.has("performance")) return "대표 무대와 공식 성과";
+  if (categories.has("award")) return "수상 및 선정 이력";
+  if (categories.has("performance")) return "대표 공연 및 활동";
+  if (categories.has("media")) return "방송 및 언론 기록";
+  return "주요 활동 이력";
+}
+
+function proposalBullets(profile: ProfileData) {
+  const strength = (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths)[0] || profile.tagline;
+  return [
+    `무대 구성 · ${[profile.primaryField, profile.secondaryField, profile.members].filter(Boolean).join(" · ")}`,
+    strength ? `관객 경험 · ${strength}` : "",
+    `제안 범위 · ${[profile.purpose, profile.region].filter(Boolean).join(" · ")}`,
+  ].filter((item) => !item.endsWith("· ")).map((item) => compactText(item, 34)).slice(0, 3);
 }
 
 function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
@@ -263,19 +250,20 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   const proposalFactIndexes = selectProposalFactIndexes(deckFacts, profile.pageCount >= 8 ? 12 : 6);
   const evidenceAt = (index: number) => proposalFactIndexes.length ? [proposalFactIndexes[index % proposalFactIndexes.length]] : [];
   const evidenceFactAt = (index: number) => deckFacts[evidenceAt(index)[0]];
+  const purposeTitle = compactText(`${profile.purpose || "행사"}에 맞춘 ${profile.primaryField || "문화예술"} 무대`, 32);
   const visualAssets = assets;
   const slides: DeckSlidePlan[] = [
-    { type: "cover", eyebrow: "아티스트 제안", title: profile.artistName || "ARTIST", body: factDrivenClaim(evidenceFactAt(0), compactText(profile.tagline, 42)), bullets: [], imageRefs: visualAssets[0] ? [visualAssets[0].id] : [], imagePurpose: "얼굴과 분위기가 선명한 세로 대표사진 · 반신 또는 전신", careerIndexes: evidenceAt(0), layout: "split_right" },
-    { type: "about", eyebrow: "아티스트 소개", title: factDrivenClaim(evidenceFactAt(1), profile.tagline || `${profile.primaryField}로 만드는 무대`), body: compactText(profile.introduction, 105), bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean).slice(0, 2), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: evidenceAt(1), layout: "split_right" },
-    { type: "strengths", eyebrow: "선택 이유", title: proposalFactIndexes.length ? "실제 활동으로 확인하는 세 가지 강점" : "아티스트의 주요 강점", body: "", bullets: proposalFactIndexes.length ? proposalFactIndexes.slice(0, 3).map((factIndex) => factDrivenBullet(deckFacts[factIndex])) : (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths).slice(0, 3), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
+    { type: "cover", eyebrow: "아티스트 섭외 제안", title: profile.artistName || "ARTIST", body: purposeTitle, bullets: [], imageRefs: visualAssets[0] ? [visualAssets[0].id] : [], imagePurpose: "얼굴과 분위기가 선명한 세로 대표사진 · 반신 또는 전신", careerIndexes: evidenceAt(0), layout: "split_right" },
+    { type: "about", eyebrow: "아티스트 소개", title: compactText(profile.tagline || `${profile.primaryField}로 만드는 무대`, 32), body: compactText(profile.introduction, 105), bullets: [profile.primaryField, profile.region, profile.members].filter(Boolean).slice(0, 2), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: evidenceAt(1), layout: "split_right" },
+    { type: "strengths", eyebrow: "제안 무대", title: purposeTitle, body: "", bullets: proposalBullets(profile), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
   ];
   const galleryAssets = visualAssets.slice(2, 4);
   galleryAssets.forEach((asset, index) => {
     slides.push({
       type: "gallery",
       eyebrow: "대표 활동",
-      title: factDrivenClaim(evidenceFactAt(index + 2), index ? "다양한 현장에서 이어온 활동" : "대표 무대에서 확인하는 아티스트의 색"),
-      body: "",
+      title: factLabel(evidenceFactAt(index + 2), 32) || (index ? "다양한 현장에서 이어온 활동" : "대표 무대에서 확인하는 아티스트의 색"),
+      body: [evidenceFactAt(index + 2)?.date, evidenceFactAt(index + 2)?.organization].filter(Boolean).join(" · "),
       bullets: [],
       imageRefs: [asset.id],
       imagePurpose: index ? galleryPhotoGuides[1] : galleryPhotoGuides[0],
@@ -295,7 +283,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     slides.push({
       type: "gallery",
       eyebrow: "활동 하이라이트",
-      title: factDrivenClaim(fact, "아티스트의 주요 활동"),
+      title: factLabel(fact, 32) || "아티스트의 주요 활동",
       body: fact?.organization ? compactText(`${fact.date} · ${fact.organization}`, 42) : "",
       bullets: [], imageRefs: [], imagePurpose: "", careerIndexes: Number.isInteger(factIndex) ? [factIndex] : [], layout: "gallery",
     });
@@ -303,7 +291,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   const contact: DeckSlidePlan = {
     type: "contact",
     eyebrow: "섭외 문의",
-    title: compactText(`${profile.purpose || "다음 무대"}에 맞춘 ${profile.primaryField || "예술"} 제안`, 30),
+    title: "가능 일정과 출연 조건을 확인해 보세요",
     body: [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "),
     bullets: [profile.contact || "연락 가능한 전화번호 또는 이메일을 입력해 주세요", profile.videoUrl || profile.officialUrl].filter(Boolean),
     imageRefs: [], imagePurpose: "", careerIndexes: evidenceAt(4), layout: "editorial",
@@ -562,22 +550,22 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     }
 
     if (slidePlan.type === "contact") {
-      addEyebrow(slide, "BOOKING & CONTACT");
+      addEyebrow(slide, slidePlan.eyebrow || "섭외 문의");
       if (primaryImage) addImage(slide, primaryImage, 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const contactWidth = primaryImage ? 7.15 : 11.4;
-      slide.addText(wrapTextAtWords(slidePlan.title || "행사 목적에 맞는 무대를 제안드립니다", primaryImage ? 19 : 28, 2), { x: 0.78, y: 1.35, w: contactWidth, h: 1.15, fontSize: primaryImage ? 42 : 46, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
+      slide.addText(wrapTextAtWords(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", primaryImage ? 19 : 28, 2), { x: 0.78, y: 1.35, w: contactWidth, h: 1.15, fontSize: primaryImage ? 42 : 46, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
       slide.addText(oneLineText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), 52), { x: 0.82, y: 2.85, w: contactWidth, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink" });
-      const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "연락 가능한 전화번호 또는 이메일을 입력해 주세요";
+      const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "공식 채널을 통해 문의해 주세요";
       const videoUrl = normalizeVideoUrl(profile.videoUrl || profile.officialUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
-      slide.addText("CONTACT", { x: 0.82, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
+      slide.addText("문의", { x: 0.82, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
       slide.addText(oneLineText(contactText, primaryImage ? 42 : 64), { x: 2.25, y: 3.94, w: primaryImage ? 5.65 : 8.45, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
       if (videoUrl) {
         const videoLabel = isYouTubeVideoUrl(videoUrl) ? "▶  YouTube 대표 영상 바로 보기" : "▶  대표 영상 바로 보기";
-        slide.addText("VIDEO", { x: 0.82, y: 5.14, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
+        slide.addText("대표 영상", { x: 0.82, y: 5.14, w: 1.35, h: 0.25, fontSize: 9, bold: true, color: hex(p.accent), margin: 0 });
         slide.addShape(pptx.ShapeType.roundRect, { x: 2.25, y: 4.88, w: 4.65, h: 0.68, rectRadius: 0.08, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 }, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
         slide.addText(videoLabel, { x: 2.55, y: 5.08, w: 4.05, h: 0.25, fontSize: 16, bold: true, color: "FFFFFF", margin: 0, align: "center", breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
       }
-      slide.addText("일정과 행사 정보를 보내주시면 목적에 맞는 구성으로 답변드리겠습니다.", { x: 0.82, y: 6.18, w: 7.1, h: 0.3, fontSize: 13, color: hex(p.muted), margin: 0, fit: "shrink" });
+      slide.addText("행사 일정·장소·예상 관객을 알려주시면 적합한 구성과 출연 조건을 제안드립니다.", { x: 0.82, y: 6.18, w: 7.1, h: 0.3, fontSize: 13, color: hex(p.muted), margin: 0, fit: "shrink" });
       addEvidence(slide, slidePlan, 0.82, primaryImage ? 7.1 : 11.4);
       addFooter(slide, slideIndex + 1);
       return;
