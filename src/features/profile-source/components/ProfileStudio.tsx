@@ -179,7 +179,7 @@ const fields = ["보컬", "연주", "국악", "무용", "퍼포먼스", "마술"
 const strengths = ["전문적인 실력", "관객과의 소통", "밝고 즐거운 분위기", "감성적인 분위기", "입장하고 화려한 무대", "전통과 현대의 조화", "가족 모두가 즐길 수 있음", "교육적 요소", "독특한 콘셉트"];
 const experiences = ["기업행사", "공공기관 행사", "지역축제", "학교 행사", "문화재단 공연", "거리공연", "방송·미디어", "해외공연", "아직 공식 경력은 많지 않음"];
 const impressions = ["실력이 뛰어나다", "믿을 수 있다", "행사를 잘 이해한다", "관객 반응이 좋다", "밝고 친근하다", "고급스럽다", "독창적이다", "전통성이 있다", "급한 일정에도 대응할 수 있다"];
-const steps = ["자료 넣기", "내용 확인", "PPT 완성"];
+const steps = ["자료 올리기", "이름 확인", "PPT 받기"];
 const photoMenuGuides: Array<{ number: number; title: string; description: string; category?: ProfileImageCategory }> = [
   { number: 1, title: "대표사진", description: "표지에 사용할 얼굴과 분위기가 선명한 세로 사진" },
   { number: 2, title: "주요 활동사진", description: "가장 대표적인 공연·전시·창작 활동 장면", category: "activity" },
@@ -841,15 +841,15 @@ function QuickStartStep({ profile, update, progress, fileName, busy, notice, aiS
     void onAnalyzeLinks(link);
   };
   const sectionContent: Record<string, React.ReactNode> = {
-    identity: <div className="quick-identity-row" key="identity"><label><span>활동명 또는 팀명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label><label><span>분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">자료에서 자동 찾기</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label></div>,
+    identity: <label className="quick-name-field" key="identity"><span>활동명 또는 팀명 <small>이름만 먼저 알려주세요</small></span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="예: 김아트 / 아트앙상블" /></label>,
     upload: <label className={`unified-dropzone ${busy ? "busy" : ""}`} key="upload"><input type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,image/*" multiple disabled={busy} onChange={onUpload} /><span className="dropzone-icon">{busy ? <Loader2 className="spin" /> : <Upload />}</span><strong>{busy ? "자료를 읽고 있어요" : config.home.uploadTitle}</strong><small>{config.home.uploadDescription}<br />PDF·PPTX 안의 사진과 문구도 AI가 자동 선별합니다.</small></label>,
-    link: <div className="quick-link-row" key="link"><label><span>링크가 있다면 여러 개 붙여넣기 <small>최대 8개 · 한 줄에 하나씩</small></span><textarea value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) saveLink(); }} placeholder={"나무위키·OTR·쇼글·홈페이지·YouTube 링크\nhttps://...\nhttps://..."} /></label><button disabled={busy || !linkValue.trim()} onClick={saveLink}>{busy ? "분석 중" : "모든 링크 분석"}</button></div>,
-    aiStatus: <div className="quick-ai-state" key="aiStatus"><CheckCircle2 size={15} /><span>{aiStatus.configured ? `${aiStatus.provider}가 이미지형 PDF와 사진 속 글자까지 분석합니다.` : "AI 한도가 없어도 기본 OCR로 자료를 정리합니다."}</span></div>,
+    link: <details className="quick-optional-links" key="link"><summary><Plus size={14} /> 웹 링크도 있어요 <small>선택사항</small><ChevronRight size={14} /></summary><div className="quick-link-row"><label><span>나무위키·OTR·쇼글·홈페이지·YouTube <small>최대 8개</small></span><textarea value={linkValue} onChange={(event) => setLinkValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) saveLink(); }} placeholder={"링크를 한 줄에 하나씩 붙여넣어 주세요\nhttps://..."} /></label><button disabled={busy || !linkValue.trim()} onClick={saveLink}>{busy ? "분석 중" : "링크 분석"}</button></div></details>,
+    aiStatus: <div className="quick-ai-state" key="aiStatus"><CheckCircle2 size={15} /><span>{aiStatus.configured ? "사진 속 글자와 이미지형 PDF도 자동으로 읽습니다." : "AI 한도가 없어도 기본 분석은 계속됩니다."}</span></div>,
   };
   return <section className="hero quick-start-page">
     <div className="eyebrow"><Sparkles size={14} /> {config.home.eyebrow}</div>
     <h1>{config.home.title}<br /><em>{config.home.accentTitle}</em></h1>
-    <p>{config.home.description}</p>
+    <p>PDF·PPTX·사진 중 가지고 있는 자료만 올려주세요. 경력 정리부터 디자인까지 자동으로 처리합니다.</p>
     <div className="quick-start-card">
       {config.home.sections.filter((section) => section.enabled && section.key !== "trust").map((section) => sectionContent[section.key])}
       {progress > 0 && <div className="quick-analysis-progress"><div><span style={{ width: `${progress}%` }} /></div><strong>{fileName || "업로드한 자료"} · {progress}%</strong></div>}
@@ -872,30 +872,20 @@ function QuickReviewStep({ profile, update, setProfile, uploadImage, busy, notic
 }) {
   const realCareers = profile.careers.filter((career) => career.title.trim() || career.organization.trim());
   const reviewItems = profile.extractedItems.filter((item) => ["career", "performance", "award", "media", "introduction"].includes(item.type)).slice(0, 18);
-  const checks = [
-    Boolean(profile.artistName.trim()), Boolean(profile.primaryField.trim()), Boolean(profile.representativeImage),
-    realCareers.length > 0, Boolean(profile.introduction.trim()), Boolean(profile.contact.trim()),
-    profile.performanceImages.filter(Boolean).length > 0, Boolean(profile.videoUrl.trim()),
-  ];
-  const completeness = Math.round(checks.filter(Boolean).length / checks.length * 100);
-  const missing = [
-    !profile.representativeImage && "표지에 사용할 대표사진",
-    !realCareers.length && "대표 경력 또는 수상 1개",
-    !profile.contact.trim() && "섭외 연락처",
-    !profile.performanceImages.filter(Boolean).length && "활동사진 1장",
-  ].filter((item): item is string => Boolean(item));
+  const approvedItems = reviewItems.filter((item) => item.status !== "excluded");
+  const visualCount = profile.performanceImages.filter(Boolean).length + (profile.representativeImage ? 1 : 0) + profile.pdfPageAssets.flatMap((page) => page.extractedVisuals ?? []).filter((visual) => visual.selected).length;
   const setItemStatus = (id: string, status: ExtractedItem["status"]) => update("extractedItems", profile.extractedItems.map((item) => item.id === id ? { ...item, status } : item));
 
   return <section className="stage quick-review-stage">
-    <div className="section-heading"><span>02 · 내용 확인</span><h1>앱이 정리한 내용만 확인해 주세요</h1><p>맞는 내용은 그대로 두고, 다른 사람의 기록이나 불필요한 항목만 제외하면 됩니다.</p></div>
-    <div className="quick-score-card"><div><span>현재 자료 완성도</span><strong>{completeness}<small>점</small></strong></div><div><div className="score-track"><span style={{ width: `${completeness}%` }} /></div><p>{missing.length ? `${missing.slice(0, 2).join(" · ")} 추가 시 PPT가 더 좋아집니다.` : "현재 자료만으로 완성도 높은 PPT를 만들 수 있어요."}</p></div></div>
-    <div className="quick-essential-card"><div className="card-heading"><div><h2>꼭 필요한 정보</h2><p>세 가지만 확인하면 바로 PPT를 만들 수 있습니다.</p></div><span className="required-count">필수 3개</span></div><div className="quick-essential-grid"><label><span>활동명</span><input value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="활동명 또는 팀명" /></label><label><span>활동 분야</span><select value={profile.primaryField} onChange={(event) => update("primaryField", event.target.value)}><option value="">선택해 주세요</option>{fields.map((field) => <option key={field}>{field}</option>)}</select></label><label><span>섭외 연락처 <small>나중에 가능</small></span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label></div></div>
-    <div className="quick-media-card"><div><div className="quick-cover-photo">{profile.representativeImage ? <img src={profile.representativeImage} alt="대표사진" /> : <ImagePlus />}<label><input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} />{profile.representativeImage ? "대표사진 바꾸기" : "대표사진 추가"}</label></div><div><h2>사진은 이미 자동으로 정리했습니다</h2><p>기존 PDF·PPTX에서 AI가 대표사진과 활동사진을 골라 모든 페이지에 자동 배치합니다.</p><label className="quick-add-photos"><input type="file" accept="image/*" multiple onChange={(event) => uploadImage(event, false, "activity")} /><Plus size={14} /> 필요한 경우만 사진 추가</label><small>자동 선택 · 대표사진 {profile.representativeImage ? 1 : 0}장 · 활동사진 {profile.performanceImages.filter(Boolean).length}장</small></div></div></div>
-    <div className="quick-review-card"><div className="card-heading"><div><h2>찾아낸 경력·수상·공연</h2><p>초록색은 반영, 회색은 제외됩니다.</p></div><span>{reviewItems.length || realCareers.length}개 발견</span></div>{reviewItems.length ? <div className="fact-confirm-list">{reviewItems.map((item) => <article className={item.status === "excluded" ? "excluded" : "approved"} key={item.id}><div><span>{item.type === "award" ? "수상" : item.type === "performance" ? "공연" : item.type === "media" ? "보도" : "경력"}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><strong>{item.value}</strong></div><div><button className={item.status !== "excluded" ? "selected" : ""} onClick={() => setItemStatus(item.id, "approved")}><Check size={13} /> 맞아요</button><button className={item.status === "excluded" ? "selected exclude" : ""} onClick={() => setItemStatus(item.id, "excluded")}><X size={13} /> 제외</button></div></article>)}</div> : <div className="empty-facts"><FileText /><strong>아직 추출된 경력이 없습니다</strong><p>세부 설정에서 경력 한 줄만 추가해도 PPT를 만들 수 있어요.</p></div>}</div>
-    {!profile.introduction.trim() && <button className="quick-copy-button" disabled={busy || !profile.artistName.trim()} onClick={generate}>{busy ? <Loader2 className="spin" /> : <WandSparkles />} 자료로 소개문 자동 작성</button>}
+    <div className="section-heading simple-review-heading"><span>02 · 마지막 확인</span><h1>활동명만 맞으면 바로 만들 수 있어요</h1><p>소개문·사진 선택·디자인·페이지 구성은 앱이 자동으로 결정합니다.</p></div>
+    <div className="simple-review-card">
+      <div className="simple-review-photo">{profile.representativeImage ? <img src={profile.representativeImage} alt="자동 선택한 대표사진" /> : <ImagePlus />}<label><input type="file" accept="image/*" onChange={(event) => uploadImage(event, true)} />{profile.representativeImage ? "사진 변경" : "사진 추가"}</label></div>
+      <div className="simple-review-main"><label><span>활동명 또는 팀명</span><input autoFocus value={profile.artistName} onChange={(event) => update("artistName", event.target.value)} placeholder="활동명 또는 팀명" /></label><label><span>섭외 연락처 <small>없으면 나중에 추가해도 됩니다</small></span><input value={profile.contact} onChange={(event) => update("contact", event.target.value)} placeholder="이메일 또는 전화번호" /></label><div className="auto-summary"><span><Check size={13} /> 경력·수상 {approvedItems.length || realCareers.length}건</span><span><Check size={13} /> 사용 가능 사진 {visualCount}장</span><span><Check size={13} /> 디자인 자동 추천</span></div></div>
+    </div>
+    <button className="simple-build-button" disabled={busy || !profile.artistName.trim()} onClick={() => void onBuild()}>{busy ? <><Loader2 className="spin" /> 자료를 바탕으로 PPT를 만들고 있어요</> : <><Sparkles size={17} /> 자동으로 PPT 완성하기 <ArrowRight size={17} /></>}</button>
     {notice && <div className="notice warning quick-notice">{notice}</div>}
-    <details className="advanced-settings"><summary><PenLine size={15} /> 필요한 경우에만 세부 내용 수정 <ChevronRight size={15} /></summary><div><InformationStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} notice={notice} /><ContentStep profile={profile} update={update} busy={busy} generate={generate} notice={notice} /><DesignStep profile={profile} update={update} /></div></details>
-    <div className="quick-build-bar"><div><strong>{profile.artistName || "아티스트"} 프로필 초안</strong><span>사진 선택·문구 압축·페이지 배치는 앱이 자동으로 완성합니다.</span></div><button disabled={busy || !profile.artistName.trim()} onClick={() => void onBuild()}>{busy ? <><Loader2 className="spin" /> PPT 구성 중</> : <>이 정보로 PPT 자동 완성 <ArrowRight size={16} /></>}</button></div>
+    <details className="simple-check-details"><summary><CheckCircle2 size={15} /> 자동으로 찾은 경력 확인 <span>{approvedItems.length || realCareers.length}건 반영</span><ChevronRight size={15} /></summary><div>{reviewItems.length ? <div className="fact-confirm-list">{reviewItems.map((item) => <article className={item.status === "excluded" ? "excluded" : "approved"} key={item.id}><div><span>{item.type === "award" ? "수상" : item.type === "performance" ? "공연" : item.type === "media" ? "보도" : "경력"}{item.pageNumber ? ` · ${item.pageNumber}p` : ""}</span><strong>{item.value}</strong></div><div><button className={item.status !== "excluded" ? "selected" : ""} onClick={() => setItemStatus(item.id, "approved")}><Check size={13} /> 사용</button><button className={item.status === "excluded" ? "selected exclude" : ""} onClick={() => setItemStatus(item.id, "excluded")}><X size={13} /> 제외</button></div></article>)}</div> : <div className="empty-facts"><FileText /><strong>찾은 경력이 아직 없습니다</strong><p>그대로 진행하거나 세부 수정에서 경력을 추가할 수 있어요.</p></div>}</div></details>
+    <details className="advanced-settings"><summary><PenLine size={15} /> 사진·문구·디자인을 직접 바꾸고 싶어요 <span>선택사항</span><ChevronRight size={15} /></summary><div><InformationStep profile={profile} update={update} setProfile={setProfile} uploadImage={uploadImage} notice={notice} /><ContentStep profile={profile} update={update} busy={busy} generate={generate} notice={notice} /><DesignStep profile={profile} update={update} /></div></details>
   </section>;
 }
 
