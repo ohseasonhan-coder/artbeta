@@ -2,6 +2,7 @@ import { DeckPlan, DeckPlanMeta, DeckQualityCheck, DeckSlidePlan, ProfileData, P
 import { getTemplate } from "@/features/design-templates/registry/templates";
 import { buildDeckFacts, formatCareerFact, rankDeckFactIndexes, type DeckFact } from "./deck-facts";
 import { bookingConditionBullets, hasConfirmedBookingConditions } from "./booking-conditions";
+import { renderDeckQaFrames } from "./deck-visual-qa";
 import { compactKoreanText, fitKoreanTextBox, koreanTextWidth, normalizeKoreanDisplayText, oneLineKoreanText } from "./korean-typesetting";
 
 const hex = (value: string) => value.replace("#", "");
@@ -56,6 +57,24 @@ export interface DeckExportResult {
   slideCount: number;
   qualityScore?: number;
   qualityIssues?: string[];
+  visualQualityScore?: number;
+  visualReviewIterations?: number;
+}
+
+interface DeckVisualReviewResult {
+  overallScore: number;
+  deckIssues: string[];
+  slides: Array<{
+    slideIndex: number;
+    score: number;
+    verdict: "pass" | "revise";
+    issues: string[];
+    rationale: string;
+    revision?: { title: string; body: string; bullets: string[]; layout: DeckSlidePlan["layout"] };
+  }>;
+  provider: string;
+  model: string;
+  reviewVersion: string;
 }
 
 export function collectDeckAssets(profile: ProfileData): VisualAsset[] {
@@ -748,15 +767,104 @@ async function requestDeckPlan(profile: ProfileData, assets: VisualAsset[]) {
   return response.json() as Promise<{ plan: DeckPlan; mode: "ai"; provider: string; model: string; promptVersion?: string; qualityScore?: number; coveredFactCount?: number; totalFactCount?: number }>;
 }
 
+async function requestDeckVisualReview(plan: DeckPlan, profile: ProfileData, assets: VisualAsset[], iteration: number) {
+  const template = getTemplate(profile.templateKey);
+  const assetData = new Map(assets.map((asset) => [asset.id, asset.dataUrl]));
+  const frames = await renderDeckQaFrames(plan, profile, template, assetData);
+  if (!frames.length) throw new Error("시각 검수 프레임을 만들지 못했습니다.");
+  const facts = buildDeckFacts(profile);
+  const profileEvidence = {
+    artistName: profile.artistName,
+    primaryField: profile.primaryField,
+    region: profile.region,
+    purpose: profile.purpose,
+    performanceDuration: profile.performanceDuration,
+    castSize: profile.castSize,
+    technicalRequirements: profile.technicalRequirements,
+    careers: facts.map((fact, index) => ({ index, date: fact.date, title: fact.title, organization: fact.organization, category: fact.category })),
+  };
+  const response = await fetch("/api/ai/review-deck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: profileEvidence, plan, frames, iteration }) });
+  if (!response.ok) {
+    const details = await response.json().catch(() => null) as { error?: string; code?: string } | null;
+    const error = new Error(details?.error || "Gemini 시각 검수를 완료하지 못했습니다.") as Error & { code?: string };
+    error.code = details?.code;
+    throw error;
+  }
+  return response.json() as Promise<DeckVisualReviewResult>;
+}
+
+function applyVisualReview(plan: DeckPlan, review: DeckVisualReviewResult, assets: VisualAsset[]) {
+  const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
+  let revisedCount = 0;
+  const slides = plan.slides.map((slide, slideIndex) => {
+    const result = review.slides.find((item) => item.slideIndex === slideIndex);
+    if (!result || result.verdict !== "revise" || result.score >= 90 || !result.revision) return slide;
+    revisedCount += 1;
+    const firstAsset = slide.imageRefs[0] ? assetMap.get(slide.imageRefs[0]) : undefined;
+    const requestedLayout = result.revision.layout;
+    const layout = requestedLayout === "full_bleed" && (!firstAsset || !canUseAsBackground(firstAsset, slide.type))
+      ? slide.layout === "full_bleed" ? "split_right" : slide.layout
+      : requestedLayout;
+    return {
+      ...slide,
+      title: result.revision.title || slide.title,
+      body: result.revision.body,
+      bullets: result.revision.bullets,
+      layout,
+      imageRefs: [...slide.imageRefs],
+      careerIndexes: [...slide.careerIndexes],
+    };
+  });
+  return { plan: { ...plan, slides }, revisedCount };
+}
+
+async function runVisualReviewLoop(plan: DeckPlan, profile: ProfileData, assets: VisualAsset[]) {
+  let current = plan;
+  let score = 0;
+  let iterations = 0;
+  let issues: string[] = [];
+  let version = "";
+  for (let iteration = 1; iteration <= 2; iteration += 1) {
+    const review = await requestDeckVisualReview(current, profile, assets, iteration);
+    iterations = iteration;
+    score = review.overallScore;
+    issues = [...new Set([...review.deckIssues, ...review.slides.filter((slide) => slide.score < 90).flatMap((slide) => slide.issues.map((issue) => `${slide.slideIndex + 1}페이지 · ${issue}`))])].slice(0, 12);
+    version = review.reviewVersion;
+    const revised = applyVisualReview(current, review, assets);
+    current = normalizeNarrativeStructure(enforceDeckSafety({ ...revised.plan, slides: paginateSlideCopy(revised.plan.slides, profile).map(fitSlideCopy) }), profile);
+    if (score >= 90 || revised.revisedCount === 0) break;
+  }
+  return { plan: current, score, iterations, issues, version };
+}
+
 export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: DeckPlan; meta: DeckPlanMeta }> {
   const assets = await prepareVisualAssets(profile);
   try {
     const result = await requestDeckPlan(profile, assets);
     const coveredPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(result.plan, profile), assets, profile), profile), profile);
     const safePlan = enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides, profile).map(fitSlideCopy) });
-    const finalPlan = normalizeNarrativeStructure(safePlan, profile);
+    let finalPlan = normalizeNarrativeStructure(safePlan, profile);
+    let visualQualityScore: number | undefined;
+    let visualReviewIterations = 0;
+    let visualQualityIssues: string[] = [];
+    let reviewVersion = "";
+    let reviewWarning = "";
+    try {
+      const visualReview = await runVisualReviewLoop(finalPlan, profile, assets);
+      finalPlan = visualReview.plan;
+      visualQualityScore = visualReview.score;
+      visualReviewIterations = visualReview.iterations;
+      visualQualityIssues = visualReview.issues;
+      reviewVersion = visualReview.version;
+    } catch (error) {
+      reviewWarning = error instanceof Error ? error.message : "시각 검수를 완료하지 못했습니다.";
+    }
     const quality = auditDeckQuality(finalPlan, profile, assets);
-    return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, promptVersion: result.promptVersion, qualityScore: quality.score, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks: quality.checks, qualityIssues: quality.issues } };
+    const visualCheck = { id: "visual_review", label: "AI 시각 출고 검사", passed: visualQualityScore !== undefined && visualQualityScore >= 90, detail: visualQualityScore === undefined ? reviewWarning || "시각 검수를 실행하지 못했습니다." : `${reviewVersion || "visual-director"} · ${visualReviewIterations}회 검수 · ${visualQualityScore}점` };
+    const qualityChecks = [...quality.checks, visualCheck];
+    const qualityScore = visualQualityScore === undefined ? Math.min(85, quality.score) : Math.round(quality.score * .45 + visualQualityScore * .55);
+    const qualityIssues = [...quality.issues, ...visualQualityIssues, ...(visualQualityScore === undefined ? [`AI 시각 출고 검사: ${reviewWarning || "실행하지 못했습니다."}`] : [])];
+    return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, promptVersion: result.promptVersion, warning: reviewWarning || undefined, qualityScore, visualQualityScore, visualReviewIterations, visualQualityIssues, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks, qualityIssues } };
   } catch (error) {
     const failure = error as Error & { code?: string };
     const coveredLocalPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(fallbackPlan(profile, assets), profile), assets, profile), profile), profile);
@@ -785,10 +893,13 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const p = template.palette;
   const assets = await prepareVisualAssets(profile);
   const minimumUsefulSlides = Math.max(8, profile.pageCount - 1);
-  const prepared = profile.deckPlan && profile.deckPlanMeta && profile.deckPlan.slides.length >= minimumUsefulSlides
-    ? { plan: profile.deckPlan, meta: profile.deckPlanMeta }
+  const hasPreparedReviewedPlan = Boolean(profile.deckPlan && profile.deckPlanMeta && profile.deckPlan.slides.length >= minimumUsefulSlides);
+  const prepared: { plan: DeckPlan; meta: DeckPlanMeta } = hasPreparedReviewedPlan
+    ? { plan: profile.deckPlan!, meta: profile.deckPlanMeta! }
     : await prepareDeckPlan(profile);
-  const coveredPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(prepared.plan, profile), assets, profile), profile), profile);
+  const coveredPlan = hasPreparedReviewedPlan
+    ? ensureCompleteCareerCoverage(prepared.plan, profile)
+    : ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(prepared.plan, profile), assets, profile), profile), profile);
   const plan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides, profile).map(fitSlideCopy) }), profile);
   const exportMeta = prepared.meta;
   const deckFacts = buildDeckFacts(profile);
@@ -1063,5 +1174,6 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     await pptx.writeFile({ fileName });
   }
   const quality = auditDeckQuality(plan, profile, assets);
-  return { ...exportMeta, qualityScore: quality.score, qualityIssues: quality.issues, slideCount: plan.slides.length };
+  const finalQualityScore = exportMeta.visualQualityScore === undefined ? exportMeta.qualityScore ?? quality.score : Math.round(quality.score * .45 + exportMeta.visualQualityScore * .55);
+  return { ...exportMeta, qualityScore: finalQualityScore, qualityIssues: [...new Set([...quality.issues, ...(exportMeta.visualQualityIssues ?? [])])], slideCount: plan.slides.length };
 }

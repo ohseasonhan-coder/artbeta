@@ -122,6 +122,9 @@ export interface DeckPlanMeta {
   totalFactCount?: number;
   qualityChecks?: DeckQualityCheck[];
   qualityIssues?: string[];
+  visualQualityScore?: number;
+  visualReviewIterations?: number;
+  visualQualityIssues?: string[];
 }
 
 export interface DeckQualityCheck {
