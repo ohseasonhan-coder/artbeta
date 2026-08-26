@@ -1,7 +1,8 @@
 import { DeckPlan, DeckPlanMeta, DeckQualityCheck, DeckQualityDimensionId, DeckQualityMetric, DeckSlidePlan, ProfileData, ProfileVisualRole } from "@/types/profile";
 import { getTemplate } from "@/features/design-templates/registry/templates";
 import { buildDeckFacts, formatCareerFact, rankDeckFactIndexes, type DeckFact } from "./deck-facts";
-import { bookingConditionBullets, hasConfirmedBookingConditions } from "./booking-conditions";
+import { hasConfirmedBookingConditions } from "./booking-conditions";
+import { buildDecisionHookBullets, buildDecisionHookTitle, hasStrongDecisionHooks } from "./decision-hooks";
 import { renderDeckQaFrames } from "./deck-visual-qa";
 import { compactKoreanText, fitKoreanTextBox, koreanTextWidth, normalizeKoreanDisplayText, oneLineKoreanText } from "./korean-typesetting";
 
@@ -288,6 +289,9 @@ function auditDeckQuality(plan: DeckPlan, profile: ProfileData, assets: VisualAs
       return lines.length <= maxLines && lines.every((line) => line.length > 0 && !/^[,.;:!?·|｜)\]}]/.test(line) && !/[([{·|｜]$/.test(line));
     });
   };
+  const decisionSlide = plan.slides.find((slide) => slide.type === "strengths");
+  const decisionHooksReady = Boolean(decisionSlide && hasStrongDecisionHooks(decisionSlide.title, decisionSlide.bullets, facts.length > 0));
+  const takeawayTitlesReady = plan.slides.filter((slide) => !["cover", "career"].includes(slide.type)).every((slide) => slide.title.trim().length >= 8 && !/^(주요 활동|대표 활동|아티스트 소개|대표 사진|프로필|공연 프로그램|출연 구성)$/i.test(slide.title.trim()));
   const checks: DeckQualityCheck[] = [
     { id: "structure", label: "설득 흐름", passed: plan.slides[0]?.type === "cover" && plan.slides.at(-1)?.type === "contact", detail: "표지에서 섭외 문의까지 한 방향으로 구성" },
     { id: "purpose", label: "페이지별 단일 목적", passed: ["cover", "about", "strengths", "program", "team", "contact"].every((type) => plan.slides.filter((slide) => slide.type === type).length <= 1), detail: "소개·제안·프로그램·팀 구성·근거·문의 역할 중복 방지" },
@@ -306,6 +310,8 @@ function auditDeckQuality(plan: DeckPlan, profile: ProfileData, assets: VisualAs
     { id: "gallery_photo", label: "대표 장면 사진 품질", passed: plan.slides.filter((slide) => slide.type === "gallery").every((slide) => slide.imageRefs.every((id) => assetMap.get(id)?.visualType === "photo")), detail: "문서 전체 캡처·연혁표·포스터를 대표 활동사진처럼 확대하지 않음" },
     { id: "gallery_titles", label: "반복 문구 방지", passed: (() => { const titles = plan.slides.filter((slide) => slide.type === "gallery").map((slide) => slide.title.replace(/\s+/g, " ").trim()); return new Set(titles).size === titles.length; })(), detail: "연속된 대표 장면마다 서로 다른 메시지 사용" },
     { id: "contact", label: "섭외 행동 유도", passed: /문의|일정|출연|조건/.test(plan.slides.at(-1)?.title || ""), detail: profile.contact.trim() ? "실제 연락처 포함" : "연락처가 없어 공식 문의 문구로 대체" },
+    { id: "buyer_hooks", label: "담당자 선택 포인트", passed: decisionHooksReady, detail: "제안 적합성·공식 근거·선택 구성 또는 운영 조건을 세 문장으로 제시" },
+    { id: "takeaway_titles", label: "결론형 페이지 제목", passed: takeawayTitlesReady, detail: "단순 분류명이 아니라 담당자가 기억할 결론을 제목으로 제시" },
     { id: "gallery_copy", label: "대표 장면 제목 정제", passed: plan.slides.filter((slide) => slide.type === "gallery").every((slide) => !/정리\s*사진|스크린샷|캡처|IMG[_-]?\d|DSC[_-]?\d|\.jpe?g|\.png/i.test(`${slide.title} ${slide.body}`)), detail: "파일명·사진 정리 문구·OCR 조각을 고객용 제목으로 사용하지 않음" },
     { id: "final_copy", label: "내부 제작 문구 제거", passed: plan.slides.every((slide) => !/PHOTO\s*BRIEF|VERIFIED|이미지\s*(준비|삽입|교체)|사실\s*확인\s*필요|입력해\s*주세요/i.test(`${slide.eyebrow} ${slide.title} ${slide.body} ${slide.bullets.join(" ")}`)), detail: "고객에게 전달할 최종 문장만 표시" },
     { id: "source_markers", label: "내부 출처 표기 제거", passed: !/(?:^|\s)(?:원문\s*)?\d+\s*(?:p|페이지|슬라이드)(?:\s|$)/i.test(plan.slides.map((slide) => `${slide.eyebrow} ${slide.title} ${slide.body} ${slide.bullets.join(" ")}`).join("\n")), detail: "2p·페이지·슬라이드 같은 분석용 표기는 노트에만 보관" },
@@ -319,7 +325,7 @@ const qualityDimensionLabels: Record<DeckQualityDimensionId, string> = {
   typography: "글자·한국어 조판",
   imagery: "사진 선별·배치",
   design: "디자인 완성도",
-  persuasion: "담당자 설득력",
+  persuasion: "담당자 후킹·설득력",
 };
 
 function evaluateQualityMetrics(plan: DeckPlan, profile: ProfileData, assets: VisualAsset[], visualScores?: Partial<Record<DeckQualityDimensionId, number>>) {
@@ -351,7 +357,7 @@ function evaluateQualityMetrics(plan: DeckPlan, profile: ProfileData, assets: Vi
   const layoutVariety = Math.min(1, layouts.size / Math.min(3, Math.max(1, plan.slides.length - 2)));
   const designDeterministic = Math.round(passRatio(["structure", "purpose", "gallery_titles", "gallery_copy"]) * 75 + layoutVariety * 25);
   const videoReady = !normalizeVideoUrl(profile.videoUrl) || plan.slides.some((slide) => slide.type === "contact" && slide.bullets.some((bullet) => normalizeVideoUrl(bullet) === normalizeVideoUrl(profile.videoUrl)));
-  const persuasionDeterministic = Math.round(passRatio(["structure", "offer_completeness", "evidence", "contact", "final_copy"]) * 90 + (videoReady ? 10 : 0));
+  const persuasionDeterministic = Math.round(passRatio(["structure", "offer_completeness", "evidence", "contact", "buyer_hooks", "takeaway_titles", "final_copy"]) * 90 + (videoReady ? 10 : 0));
   const deterministic: Record<DeckQualityDimensionId, number> = {
     content: contentDeterministic,
     typography: typographyDeterministic,
@@ -365,7 +371,7 @@ function evaluateQualityMetrics(plan: DeckPlan, profile: ProfileData, assets: Vi
     typography: ["text", "word_wrap", "korean_typesetting", "final_copy", "source_markers"],
     imagery: ["images", "image_quality", "image_identity", "background_quality", "image_role", "empty_gallery", "gallery_alignment", "gallery_photo"],
     design: ["structure", "purpose", "gallery_titles", "gallery_copy"],
-    persuasion: ["structure", "offer_completeness", "evidence", "contact", "final_copy"],
+    persuasion: ["structure", "offer_completeness", "evidence", "contact", "buyer_hooks", "takeaway_titles", "final_copy"],
   };
   const metrics = (Object.keys(qualityDimensionLabels) as DeckQualityDimensionId[]).map((id): DeckQualityMetric => {
     const visualScore = visualScores?.[id];
@@ -524,12 +530,12 @@ function paginateCareerFactIndexes(indexes: number[], facts: DeckFact[], pageCou
   const groups = categoryOrder.map((category) => indexes.filter((index) => facts[index]?.category === category));
   const pages: number[][] = [];
   groups.forEach((group) => {
-    if (pages.length < pageCount && group.length) pages.push(group.splice(0, 8));
+    if (pages.length < pageCount && group.length) pages.push(group.splice(0, 6));
   });
   const leftovers = groups.flat();
-  while (leftovers.length && pages.length < pageCount) pages.push(leftovers.splice(0, 8));
+  while (leftovers.length && pages.length < pageCount) pages.push(leftovers.splice(0, 6));
   leftovers.forEach((factIndex) => {
-    const target = pages.find((page) => page.length < 8);
+    const target = pages.find((page) => page.length < 6);
     if (target) target.push(factIndex);
   });
   return pages.slice(0, pageCount);
@@ -543,17 +549,9 @@ function extractedProfileValues(profile: ProfileData, type: "repertoire" | "prog
 }
 
 function proposalBullets(profile: ProfileData) {
-  const confirmedConditions = bookingConditionBullets(profile);
-  if (confirmedConditions.length) return confirmedConditions;
   const configurations = extractedProfileValues(profile, "program_configuration", 4);
   const repertoire = extractedProfileValues(profile, "repertoire", 6);
-  const strength = (profile.generatedStrengths.length ? profile.generatedStrengths : profile.strengths)[0] || profile.tagline;
-  const proposal = [
-    `무대 구성 · ${configurations[0] || [profile.primaryField, profile.secondaryField].filter(Boolean).join(" · ")}`,
-    repertoire.length ? `대표 레퍼토리 · ${repertoire.slice(0, 2).join(" · ")}` : strength ? `관객 경험 · ${strength}` : "",
-    `제안 범위 · ${[profile.purpose, profile.region].filter(Boolean).join(" · ")}`,
-  ].filter((item) => !item.endsWith("· "));
-  return proposal.map((item) => compactText(item, 48)).slice(0, 3);
+  return buildDecisionHookBullets({ ...profile, configurations, repertoire }, buildDeckFacts(profile));
 }
 
 function aboutProofBullets(profile: ProfileData) {
@@ -573,7 +571,7 @@ function synchronizeProposalSlide(plan: DeckPlan, profile: ProfileData): DeckPla
       if (slide.type === "strengths") return {
         ...slide,
         eyebrow: bookingMode ? "섭외 조건" : "제안 무대",
-        title: bookingMode ? "확인된 섭외 조건 요약" : compactText(`${profile.purpose || "행사"}에 맞춘 ${profile.primaryField || "문화예술"} 무대`, 32),
+        title: compactText(buildDecisionHookTitle(profile), 32),
         body: "",
         bullets: proposalBullets(profile),
       };
@@ -602,7 +600,7 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
   const slides: DeckSlidePlan[] = [
     { type: "cover", eyebrow: "아티스트 섭외 제안", title: profile.artistName || "ARTIST", body: purposeTitle, bullets: [], imageRefs: visualAssets[0] ? [visualAssets[0].id] : [], imagePurpose: "얼굴과 분위기가 선명한 세로 대표사진 · 반신 또는 전신", careerIndexes: evidenceAt(0), layout: "split_right" },
     { type: "about", eyebrow: "아티스트 소개", title: compactText(profile.tagline || `${profile.primaryField}로 만드는 무대`, 32), body: compactText(profile.introduction, 105), bullets: aboutProofBullets(profile), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: evidenceAt(1), layout: "split_right" },
-    { type: "strengths", eyebrow: hasConfirmedBookingConditions(profile) ? "섭외 조건" : "제안 무대", title: hasConfirmedBookingConditions(profile) ? "확인된 섭외 조건 요약" : purposeTitle, body: "", bullets: proposalBullets(profile), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
+    { type: "strengths", eyebrow: hasConfirmedBookingConditions(profile) ? "섭외 조건" : "제안 무대", title: compactText(buildDecisionHookTitle(profile), 32), body: "", bullets: proposalBullets(profile), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
   ];
   if (repertoire.length) slides.push({ type: "program", eyebrow: "공연 프로그램", title: "행사 성격에 맞춰 선택하는 레퍼토리", body: "자료에서 확인된 공연 가능 곡과 작품을 중심으로 구성합니다.", bullets: repertoire, imageRefs: [], imagePurpose: "레퍼토리의 장르와 무대 분위기를 보여주는 실제 활동 사진", careerIndexes: [], layout: "split_right" });
   if (programConfigurations.length) slides.push({ type: "team", eyebrow: "출연 구성", title: "공간과 예산에 맞춰 고르는 팀 구성", body: "자료에서 확인된 실제 출연 형태만 제안합니다.", bullets: programConfigurations, imageRefs: [], imagePurpose: "출연 인원과 팀 구성을 한눈에 보여주는 단체 활동 사진", careerIndexes: [], layout: "split_left" });
@@ -909,7 +907,8 @@ async function runVisualReviewLoop(plan: DeckPlan, profile: ProfileData, assets:
     issues = [...new Set([...review.deckIssues, ...review.slides.filter((slide) => slide.score < 90).flatMap((slide) => slide.issues.map((issue) => `${slide.slideIndex + 1}페이지 · ${issue}`))])].slice(0, 12);
     version = review.reviewVersion;
     const revised = applyVisualReview(current, review, assets);
-    current = normalizeNarrativeStructure(enforceDeckSafety({ ...revised.plan, slides: paginateSlideCopy(revised.plan.slides, profile).map(fitSlideCopy) }), profile);
+    const synchronized = synchronizeProposalSlide(revised.plan, profile);
+    current = normalizeNarrativeStructure(enforceDeckSafety({ ...synchronized, slides: paginateSlideCopy(synchronized.slides, profile).map(fitSlideCopy) }), profile);
     if (score >= 90 && Object.values(dimensionScores).every((value) => value >= 90) || revised.revisedCount === 0) break;
   }
   return { plan: current, score, iterations, issues, version, dimensionScores };

@@ -90,9 +90,19 @@ dimensionScores 필수 평가:
 - persuasion: 담당자가 가치와 근거를 이해하고 프로그램 선택·문의 행동까지 이어갈 수 있는지
 - 다섯 항목 모두 실제 출고 가능한 경우에만 90점 이상을 부여하세요. 평균 점수로 약점을 숨기지 마세요.
 
+100점 설득 기준:
+- 표지에서 대상 행사와 아티스트의 분야가 즉시 연결됩니다.
+- 소개는 자기소개가 아니라 정체성과 가장 강한 공식 근거를 보여줍니다.
+- 제안 페이지는 '제안 적합성 ·', '공식 근거 ·', '운영 조건 ·/선택 구성 ·/선택 프로그램 ·'의 세 문장으로 담당자의 선택 이유를 만듭니다.
+- 프로그램·팀 구성은 담당자가 실제로 고를 수 있는 선택지이며, 갤러리는 사진 설명이 아니라 현장 적합성을 판단하게 합니다.
+- 경력은 목록으로 끝나지 않고 앞선 제안을 신뢰하게 하는 근거로 읽힙니다.
+- 마지막 페이지는 일정·장소·관객 정보를 전달하고 문의해야 할 이유와 경로가 명확합니다.
+- 과장 없이 위 조건을 모두 만족하고 즉시 제출 가능한 경우에만 98~100점을 부여하세요.
+
 수정 절대 규칙:
 - profile과 plan에 없는 사실, 숫자, 경력, 수상, 기관, 공연명을 만들지 마세요.
 - imageRefs와 careerIndexes는 수정할 수 없습니다. revision에는 화면 문구와 layout만 제안하세요.
+- strengths 페이지의 세 가지 후킹 라벨과 사실 근거는 유지하고, 길이·위계·배치만 개선하세요.
 - title은 최대 32자, body는 최대 105자, bullet은 항목당 최대 48자로 작성하세요.
 - 내부 제작 문구, 원문 페이지, 2p 같은 표기, PHOTO BRIEF, 사실 확인 필요 문구를 쓰지 마세요.
 - 문제를 숨기기 위해 내용을 무조건 길게 만들거나 추상적인 홍보 문구를 추가하지 마세요.
@@ -112,7 +122,7 @@ dimensionScores 필수 평가:
       config: { responseMimeType: "application/json", responseJsonSchema: z.toJSONSchema(reviewSchema), temperature: 0.15, maxOutputTokens: 12288 },
     }));
     const review = reviewSchema.parse(JSON.parse(result.text || "{}"));
-    return NextResponse.json({ ...review, provider: "Gemini", model: process.env.GEMINI_VISUAL_REVIEW_MODEL || process.env.GEMINI_MODEL || "gemini-3.6-flash", reviewVersion: "visual-director-v1" });
+    return NextResponse.json({ ...review, provider: "Gemini", model: process.env.GEMINI_VISUAL_REVIEW_MODEL || process.env.GEMINI_MODEL || "gemini-3.6-flash", reviewVersion: "visual-director-v2-buyer-hooks" });
   } catch (error) {
     const failure = failureResponse(error);
     return NextResponse.json({ error: failure.error, code: failure.code }, { status: failure.status });

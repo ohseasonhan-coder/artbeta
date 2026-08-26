@@ -1,7 +1,8 @@
 import { GoogleGenAI, type Part } from "@google/genai";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { bookingConditionBullets, hasConfirmedBookingConditions } from "@/features/profile-export/pptx/booking-conditions";
+import { hasConfirmedBookingConditions } from "@/features/profile-export/pptx/booking-conditions";
+import { buildDecisionHookBullets, buildDecisionHookTitle, hasStrongDecisionHooks } from "@/features/profile-export/pptx/decision-hooks";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -83,7 +84,7 @@ interface FactInput {
   sourceName?: string;
 }
 
-const DECK_PROMPT_VERSION = "ppt-director-v3-ko-typesetting";
+const DECK_PROMPT_VERSION = "ppt-director-v4-buyer-hooks";
 
 const copyBudgets = {
   cover: { title: 26, body: 42, bullets: 0, bullet: 0 },
@@ -172,20 +173,18 @@ function paginateFactIndexes(indexes: number[], factsByIndex: Map<number, FactIn
   const groups = categoryOrder.map((category) => indexes.filter((index) => (factsByIndex.get(index)?.category || "career") === category));
   const pages: number[][] = [];
   groups.forEach((group) => {
-    if (pages.length < pageCount && group.length) pages.push(group.splice(0, 8));
+    if (pages.length < pageCount && group.length) pages.push(group.splice(0, 6));
   });
   const leftovers = groups.flat();
-  while (leftovers.length && pages.length < pageCount) pages.push(leftovers.splice(0, 8));
+  while (leftovers.length && pages.length < pageCount) pages.push(leftovers.splice(0, 6));
   leftovers.forEach((factIndex) => {
-    const target = pages.find((page) => page.length < 8);
+    const target = pages.find((page) => page.length < 6);
     if (target) target.push(factIndex);
   });
   return pages.slice(0, pageCount);
 }
 
 function proposalBullets(profile: Record<string, unknown>) {
-  const confirmedConditions = bookingConditionBullets(profile);
-  if (confirmedConditions.length) return confirmedConditions;
   const extractedFacts = Array.isArray(profile.extractedFacts) ? profile.extractedFacts as Array<Record<string, unknown>> : [];
   const extractedValues = (type: string) => extractedFacts
     .filter((item) => item.type === type)
@@ -193,15 +192,12 @@ function proposalBullets(profile: Record<string, unknown>) {
     .filter(Boolean);
   const configurations = extractedValues("program_configuration");
   const repertoire = extractedValues("repertoire");
-  const strengths = Array.isArray(profile.strengths) ? profile.strengths.map(String).filter(Boolean) : [];
-  const generatedStrengths = Array.isArray(profile.generatedStrengths) ? profile.generatedStrengths.map(String).filter(Boolean) : [];
-  const strength = generatedStrengths[0] || strengths[0] || String(profile.tagline || "");
-  const proposal = [
-    `무대 구성 · ${configurations[0] || [profile.primaryField, profile.secondaryField].filter(Boolean).join(" · ")}`,
-    repertoire.length ? `대표 레퍼토리 · ${repertoire.slice(0, 2).join(" · ")}` : strength ? `관객 경험 · ${strength}` : "",
-    `제안 범위 · ${[profile.purpose, profile.region].filter(Boolean).join(" · ")}`,
-  ].filter((item) => item && !item.endsWith("· "));
-  return proposal.map((item) => compactText(item, 48)).slice(0, 3);
+  const careers = (Array.isArray(profile.careers) ? profile.careers : []).map((fact) => {
+    const item = fact as Record<string, unknown>;
+    const category = ["career", "performance", "award", "media"].includes(String(item.category)) ? String(item.category) as FactInput["category"] : "career";
+    return { date: String(item.date || ""), title: String(item.title || ""), organization: String(item.organization || ""), category };
+  });
+  return buildDecisionHookBullets({ ...profile, configurations, repertoire }, careers);
 }
 
 function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCount: number, requiredGallerySlides: number, requiredCareerSlides: number, requiredProgramSlides: number, requiredTeamSlides: number, validFactIndexes: number[]) {
@@ -212,6 +208,9 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 - 독자는 '${purpose}' 담당자입니다.
 - 독자가 30초 안에 아티스트의 정체성, 제안 가능한 무대, 행사 적합성, 공식 활동 근거를 파악하고 실제 문의하도록 만드세요.
 - 사진 모음이나 이력서가 아니라 '왜 이 아티스트를 선택해야 하는가'에 답하는 제출용 포트폴리오를 기획하세요.
+- 100점의 기준은 화려한 수식어가 아니라 담당자의 다섯 질문에 빠르게 답하는 것입니다: 우리 행사와 맞는가, 무엇을 선택할 수 있는가, 실제 근거가 있는가, 운영 가능한가, 어떻게 문의하는가.
+- 각 페이지는 '사실 → 담당자에게 의미하는 가치 → 다음 판단' 중 하나를 선명하게 전달해야 합니다.
+- 첫인상 후킹은 과장된 카피가 아니라 목적 적합성·공식 경력·선택 가능한 프로그램·확인된 운영 조건에서 만드세요.
 
 사실성 절대 규칙:
 - profile, careers, extractedFacts, pdfPageText, 이미지 메타데이터에 명시된 사실만 사용하세요.
@@ -222,11 +221,11 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 서사 구조:
 1. cover: 이름과 제안 목적을 한 번에 기억시키는 최소한의 표지
 2. about: 소개문과 강한 공식 근거 2~3개로 정체성 설명
-3. strengths: 고객이 선택 가능한 무대 구성 또는 확인된 섭외 조건
+3. strengths: 제안 적합성·공식 근거·선택 구성 또는 운영 조건을 정확히 세 문장으로 제시
 4. program: 실제 자료에서 추출된 공연 가능 곡·작품·레퍼토리를 선택지로 제시
 5. team: 실제 자료에서 추출된 듀오·트리오·밴드 등 출연 구성을 선택지로 제시
 6. gallery: 서로 다른 실제 무대 장면으로 현장 실행력 제시
-7. career: 방송·공연·수상·주요 활동을 주제별로 정리한 공식 근거
+7. career: 방송·공연·수상·주요 활동을 나열하지 말고 앞선 제안을 뒷받침하는 공식 근거로 정리
 8. contact: 일정·출연 조건 문의를 요청하는 명확한 행동 유도
 
 슬라이드 역할 규칙:
@@ -235,7 +234,7 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 - program은 정확히 ${requiredProgramSlides}장입니다. extractedFacts의 repertoire만 사용해 장르·작품 선택지를 정리하세요.
 - team은 정확히 ${requiredTeamSlides}장입니다. extractedFacts의 program_configuration만 사용해 출연 구성과 인원 선택지를 정리하세요.
 - gallery는 정확히 ${requiredGallerySlides}장입니다. 한 장에 자동역할=stage인 실제 사진 1장만 사용하고, 각 페이지는 서로 다른 고객용 결론을 말해야 합니다.
-- career는 정확히 ${requiredCareerSlides}장이고 한 장당 최대 8개 경력을 사용합니다. 6개 이상이면 두 열로 배치할 수 있도록 항목을 짧게 쓰고, 카테고리별로 묶으며 연속 페이지 제목을 반복하지 마세요.
+- career는 정확히 ${requiredCareerSlides}장이고 한 장당 최대 6개 경력을 사용합니다. 4개 이상이면 두 열로 배치할 수 있도록 항목을 짧게 쓰고, 카테고리별로 묶으며 연속 페이지 제목을 반복하지 마세요.
 - cover/about/program/team/contact의 careerIndexes는 빈 배열, strengths는 관련 근거 1~3개, gallery는 직접 연결된 근거 0~1개, career는 해당 페이지 사실 index를 사용하세요.
 
 이미지 규칙:
@@ -251,6 +250,10 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 - 2p, 3페이지, 원문 4p처럼 분석 과정에서만 필요한 페이지 표시는 절대로 화면 원고에 넣지 마세요.
 - 추상적인 '전문성·완성도·신뢰·몰입도·차별화·최적'을 반복하지 말고 실제 경력이나 확인된 조건으로 말하세요.
 - 제목은 페이지의 결론이어야 하며 '주요 활동', '대표 사진' 같은 단순 분류명만 쓰지 마세요.
+- strengths 제목은 '${buildDecisionHookTitle({ purpose: profile.purpose, primaryField: profile.primaryField, secondaryField: profile.secondaryField, region: profile.region })}'의 고객 관점을 따르고, bullets는 '제안 적합성 ·', '공식 근거 ·', '운영 조건 ·/선택 구성 ·/선택 프로그램 ·' 구조를 사용하세요.
+- about은 소개문을 반복하지 말고 정체성을 보여주는 한 문장과 가장 강한 공식 근거 2~3개로 시작하세요.
+- gallery 제목은 사진 설명이 아니라 그 장면이 담당자의 행사 검토에 주는 의미를 말하세요.
+- 수상·방송·공연 기록 뒤에는 확인되지 않은 '흥행·관객 만족·브랜드 효과'를 붙이지 마세요.
 - 강제 줄바꿈 문자를 넣지 마세요. 문장을 짧게 쓰고 같은 단어나 문장을 반복하지 마세요.
 - 한국어 고유명사, 공연명, 기관명, 사람 이름을 줄이기 위해 임의로 띄어쓰거나 단어 중간을 자르지 마세요.
 - 한 문장이 길면 핵심 주장과 근거만 남겨 먼저 압축하세요. 글자 크기를 줄이는 방식에 의존하지 마세요.
@@ -263,7 +266,7 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 - program: title 32자, body 46자, bullets 최대 6개·각 36자
 - team: title 32자, body 46자, bullets 최대 4개·각 42자
 - gallery: title 32자, body 42자, bullets 0개, imageRefs 정확히 1개
-- career: title 32자, body·bullets 없음, careerIndexes 최대 8개
+- career: title 32자, body·bullets 없음, careerIndexes 최대 6개
 - contact: title 30자, body 60자, bullets 최대 2개·각 48자
 
 프로필 사실:
@@ -465,7 +468,7 @@ export async function POST(request: Request) {
     if (proposal) {
       const hasBookingConditions = hasConfirmedBookingConditions(body.profile);
       proposal.eyebrow = hasBookingConditions ? "섭외 조건" : "제안 무대";
-      proposal.title = hasBookingConditions ? "확인된 섭외 조건 요약" : purposeTitle;
+      proposal.title = compactText(buildDecisionHookTitle({ purpose: body.profile.purpose, primaryField: body.profile.primaryField, secondaryField: body.profile.secondaryField, region: body.profile.region }), 32);
       proposal.body = "";
       proposal.bullets = proposalBullets(body.profile);
     }
@@ -570,7 +573,7 @@ export async function POST(request: Request) {
         seenCopy.add(key);
         return true;
       });
-      const careerIndexLimit = slide.type === "career" ? 8 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0;
+      const careerIndexLimit = slide.type === "career" ? 6 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0;
       slide.careerIndexes = [...new Set(slide.careerIndexes)].filter((index) => validFactIndexes.has(index)).slice(0, careerIndexLimit);
     });
     const coveredIndexes = new Set(plan.slides.flatMap((slide) => slide.type === "career" ? slide.careerIndexes : []));
@@ -604,8 +607,10 @@ export async function POST(request: Request) {
       && (!slide.careerIndexes.length || hasSpecificEvidence(slide, factsByIndex)));
     const contactReady = /일정|출연|조건|문의/.test(plan.slides.at(-1)?.title || "");
     const decisionReadiness = [coverReady, proposalReady, galleryReady, contactReady].filter(Boolean).length / 4;
+    const buyerHooksReady = Boolean(proposalSlide && hasStrongDecisionHooks(proposalSlide.title, proposalSlide.bullets, facts.length > 0));
+    const takeawayTitlesReady = plan.slides.filter((slide) => !["cover", "career"].includes(slide.type)).every((slide) => slide.title.trim().length >= 8 && !/^(주요 활동|대표 활동|아티스트 소개|대표 사진|프로필|공연 프로그램|출연 구성)$/i.test(slide.title.trim()));
     const finalCopyOnly = plan.slides.every((slide) => !/PHOTO\s*BRIEF|VERIFIED|이미지\s*(준비|삽입|교체)|사실\s*확인\s*필요|입력해\s*주세요/i.test(`${slide.eyebrow} ${slide.title} ${slide.body} ${slide.bullets.join(" ")}`));
-    const qualityScore = Math.min(100, Math.round(structureScore + coverage * 25 + awardCoverage * 10 + uniqueImageScore + (textFits ? 10 : 0) + (evidenceConnected ? 10 : 0) + decisionReadiness * 15 + (finalCopyOnly ? 10 : 0)));
+    const qualityScore = Math.min(100, Math.round(structureScore + coverage * 20 + awardCoverage * 10 + uniqueImageScore + (textFits ? 10 : 0) + (evidenceConnected ? 10 : 0) + decisionReadiness * 10 + (buyerHooksReady ? 5 : 0) + (takeawayTitlesReady ? 5 : 0) + (finalCopyOnly ? 10 : 0)));
     if (qualityScore < 90) throw new Error(`PPT 품질 점수 미달: ${qualityScore}`);
     return NextResponse.json({ plan, mode: "ai", provider: "Gemini", model: process.env.GEMINI_MODEL || "gemini-3.6-flash", promptVersion: DECK_PROMPT_VERSION, qualityScore, coveredFactCount: coveredIndexes.size, totalFactCount: facts.length });
   } catch (error) {
