@@ -38,14 +38,14 @@ function fallbackRole(image: ImageInput) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { artistName?: string; primaryField?: string; images?: ImageInput[] };
+    const body = await request.json() as { artistName?: string; primaryField?: string; images?: ImageInput[]; fastMode?: boolean };
     const images = (body.images ?? []).filter((image) => image.id && image.dataUrl.startsWith("data:image/")).slice(0, 16);
     if (!images.length) return NextResponse.json({ classifications: [], mode: "empty" });
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (body.fastMode || !process.env.GEMINI_API_KEY) {
       return NextResponse.json({
-        mode: "heuristic",
-        classifications: images.map((image) => ({ id: image.id, role: fallbackRole(image), relevanceScore: 0.65, qualityScore: 0.65, duplicateOf: null, reason: "이미지 비율과 페이지 문맥으로 자동 분류" })),
+        mode: body.fastMode ? "document-context" : "heuristic",
+        classifications: images.map((image) => ({ id: image.id, role: fallbackRole(image), relevanceScore: body.fastMode ? 0.78 : 0.65, qualityScore: body.fastMode ? 0.76 : 0.65, duplicateOf: null, reason: "페이지 문맥과 이미지 비율로 빠르게 분류" })),
       });
     }
 

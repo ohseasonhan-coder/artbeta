@@ -116,9 +116,9 @@ async function renderFrame(slide: DeckSlidePlan, index: number, profile: Profile
     context.fillRect(0, 0, WIDTH, HEIGHT);
     textWidth = 480;
   } else if (image) {
-    if (slide.type === "gallery") imageFrame = { x: 386, y: 38, width: 530, height: 458 };
-    else if (slide.type === "program") imageFrame = { x: 620, y: 48, width: 296, height: 438 };
-    else if (slide.type === "career" || slide.type === "contact" || slide.type === "strengths") imageFrame = { x: 640, y: 62, width: 276, height: 420 };
+    if (slide.type === "gallery") imageFrame = imageLeft ? { x: 32, y: 38, width: 530, height: 458 } : { x: 386, y: 38, width: 530, height: 458 };
+    else if (slide.type === "program") imageFrame = imageLeft ? { x: 30, y: 48, width: 312, height: 438 } : { x: 620, y: 48, width: 296, height: 438 };
+    else if (slide.type === "career" || slide.type === "contact" || slide.type === "strengths") imageFrame = imageLeft ? { x: 30, y: 62, width: 296, height: 420 } : { x: 640, y: 62, width: 276, height: 420 };
     else imageFrame = imageLeft ? { x: 30, y: 32, width: 390, height: 476 } : { x: 548, y: 32, width: 382, height: 476 };
     context.fillStyle = color(palette.surface);
     context.fillRect(imageFrame.x, imageFrame.y, imageFrame.width, imageFrame.height);
@@ -126,9 +126,12 @@ async function renderFrame(slide: DeckSlidePlan, index: number, profile: Profile
     context.beginPath();
     context.rect(imageFrame.x, imageFrame.y, imageFrame.width, imageFrame.height);
     context.clip();
-    drawCoverImage(context, image, imageFrame.x, imageFrame.y, imageFrame.width, imageFrame.height);
+    const sourceRatio = image.naturalWidth / Math.max(1, image.naturalHeight);
+    const frameRatio = imageFrame.width / imageFrame.height;
+    const contain = Math.max(sourceRatio / frameRatio, frameRatio / sourceRatio) > 1.42;
+    drawCoverImage(context, image, imageFrame.x, imageFrame.y, imageFrame.width, imageFrame.height, contain);
     context.restore();
-    if (imageLeft && !["career", "contact", "strengths", "program", "gallery"].includes(slide.type)) textX = 468;
+    if (imageLeft) textX = slide.type === "gallery" ? 615 : ["career", "contact", "strengths", "program"].includes(slide.type) ? 372 : 468;
     textWidth = slide.type === "gallery" ? 286 : slide.type === "program" ? 530 : slide.type === "career" || slide.type === "contact" || slide.type === "strengths" ? 530 : 430;
   }
 

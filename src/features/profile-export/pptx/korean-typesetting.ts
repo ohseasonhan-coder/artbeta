@@ -20,6 +20,16 @@ export interface KoreanTextFitResult {
   truncated: boolean;
 }
 
+export interface KoreanTextBoxInchesOptions {
+  widthInches: number;
+  heightInches: number;
+  maxLines: number;
+  preferredFontSize: number;
+  minFontSize: number;
+  lineHeight?: number;
+  ellipsis?: boolean;
+}
+
 function graphemes(value: string) {
   return Array.from(value);
 }
@@ -113,6 +123,31 @@ export function fitKoreanTextBox(value: string, options: KoreanTextFitOptions): 
     if (!wrapped.truncated) return { text: wrapped.lines.join("\n"), fontSize, lineCount: wrapped.lines.length, truncated: false };
   }
   const wrapped = wrapAtKoreanWordBoundaries(value, options.maxWidth * preferred / minimum, options.maxLines, options.ellipsis ?? true);
+  return { text: wrapped.lines.join("\n"), fontSize: minimum, lineCount: wrapped.lines.length, truncated: wrapped.truncated };
+}
+
+/**
+ * Fits Korean copy against the actual PowerPoint text-box geometry.
+ * A conservative width factor is intentional: Office font metrics vary by
+ * platform, so the generated copy must still fit after font substitution.
+ */
+export function fitKoreanTextBoxInches(value: string, options: KoreanTextBoxInchesOptions): KoreanTextFitResult {
+  const preferred = Math.max(options.minFontSize, options.preferredFontSize);
+  const minimum = Math.min(preferred, options.minFontSize);
+  const lineHeight = Math.max(1.12, options.lineHeight ?? 1.2);
+  const widthSafety = 0.84;
+  for (let fontSize = preferred; fontSize >= minimum; fontSize -= 1) {
+    const heightLines = Math.floor(options.heightInches * 72 / (fontSize * lineHeight));
+    const allowedLines = Math.min(options.maxLines, heightLines);
+    if (allowedLines < 1) continue;
+    const maxWidth = options.widthInches * 72 / fontSize * widthSafety;
+    const wrapped = wrapAtKoreanWordBoundaries(value, maxWidth, allowedLines, options.ellipsis ?? true);
+    if (!wrapped.truncated) return { text: wrapped.lines.join("\n"), fontSize, lineCount: wrapped.lines.length, truncated: false };
+  }
+  const heightLines = Math.max(1, Math.floor(options.heightInches * 72 / (minimum * lineHeight)));
+  const allowedLines = Math.max(1, Math.min(options.maxLines, heightLines));
+  const maxWidth = options.widthInches * 72 / minimum * widthSafety;
+  const wrapped = wrapAtKoreanWordBoundaries(value, maxWidth, allowedLines, options.ellipsis ?? true);
   return { text: wrapped.lines.join("\n"), fontSize: minimum, lineCount: wrapped.lines.length, truncated: wrapped.truncated };
 }
 

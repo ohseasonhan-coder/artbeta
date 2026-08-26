@@ -148,7 +148,7 @@ async function classifyDocumentVisuals(pages: PdfPageAsset[], artistName: string
       height: visual.height,
       kind: visual.kind,
     })));
-    const response = await fetch("/api/ai/classify-profile-images", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artistName, primaryField, images }) });
+    const response = await fetch("/api/ai/classify-profile-images", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artistName, primaryField, images, fastMode: true }) });
     if (!response.ok) return pages;
     const result = await response.json() as { classifications?: Array<{ id: string; role: ProfileVisualRole; relevanceScore: number; qualityScore: number; duplicateOf?: string | null; reason: string }> };
     const classifications = new Map((result.classifications ?? []).map((item) => [item.id, item]));
@@ -1235,10 +1235,13 @@ function DesignStep({ profile, update }: { profile: ProfileData; update: <K exte
   useEffect(() => {
     const key = [profile.artistName, profile.primaryField, profile.affiliation, profile.identityHint, profile.representativeImage?.slice(0, 64)].join("|");
     const hasApprovedWebImage = externalImages.some((image) => image.source !== "ai" && image.usageStatus === "approved");
-    if (!profile.artistName.trim() || !profile.representativeImage || hasApprovedWebImage || autoSearchKey.current === key) return;
+    const ownedVisualCount = Number(Boolean(profile.representativeImage))
+      + profile.performanceImages.filter(Boolean).length
+      + profile.pdfPageAssets.reduce((count, page) => count + (page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected).length : 0), 0);
+    if (!profile.artistName.trim() || !profile.representativeImage || ownedVisualCount >= 5 || hasApprovedWebImage || autoSearchKey.current === key) return;
     autoSearchKey.current = key;
     void searchArtistImages(true);
-  }, [profile.artistName, profile.primaryField, profile.affiliation, profile.identityHint, profile.representativeImage, externalImages]);
+  }, [profile.artistName, profile.primaryField, profile.affiliation, profile.identityHint, profile.representativeImage, profile.performanceImages, profile.pdfPageAssets, externalImages]);
 
   const selectedPdfVisuals = profile.pdfPageAssets.flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected).map((visual) => ({ ...visual, pageNumber: page.pageNumber })) : []);
   return <section className="stage form-stage"><div className="section-heading"><span>04 · 디자인</span><h1>사진과 디자인을 선택해 주세요</h1><p>원문 페이지 전체는 PPT에 넣지 않습니다. 사진은 자연스럽게 크롭하고 포스터·그래픽은 잘리지 않게 독립 프레임으로 배치합니다.</p></div>

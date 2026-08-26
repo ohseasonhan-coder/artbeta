@@ -84,7 +84,7 @@ interface FactInput {
   sourceName?: string;
 }
 
-const DECK_PROMPT_VERSION = "ppt-director-v4-buyer-hooks";
+const DECK_PROMPT_VERSION = "ppt-director-v5-gemini-layout";
 
 const copyBudgets = {
   cover: { title: 26, body: 42, bullets: 0, bullet: 0 },
@@ -239,6 +239,9 @@ function buildDeckPlanningPrompt(profile: Record<string, unknown>, targetPageCou
 
 이미지 규칙:
 - 같은 imageRefs ID를 전체 PPT에서 한 번만 사용하세요.
+- 제공된 이미지 픽셀을 직접 비교해 각 슬라이드의 imageRefs를 선택하세요. 후처리는 안전하지 않은 선택만 교체하므로 선택한 ID와 layout이 실제 PPT에 반영됩니다.
+- 인물 중심 세로 사진은 split_left 또는 split_right, 넓은 무대 전경은 해상도 조건을 충족할 때만 full_bleed, 포스터·연혁 그래픽은 career의 작은 contain 프레임에만 사용하세요.
+- 얼굴·인물의 머리나 몸이 잘리지 않도록 사진의 피사체 방향과 여백을 보고 텍스트 반대편에 배치하세요.
 - portrait는 cover 또는 about, stage photo는 about·strengths·gallery, poster/history graphic은 career 보조 근거에만 사용하세요.
 - 포스터·연혁표·수상자료·문서 전체 캡처·콜라주를 gallery나 표지 배경으로 확대하지 마세요.
 - graphic은 비율을 보존하는 프레임, photo는 자연스러운 크롭을 전제로 합니다.
@@ -325,7 +328,7 @@ export async function POST(request: Request) {
     const factsByIndex = new Map(facts.map((fact, position) => [factIndexOf(fact, position), fact]));
     const validFactIndexes = new Set(factsByIndex.keys());
     const fixedSlideCount = 4 + requiredProgramSlides + requiredTeamSlides;
-    const requiredCareerSlides = Math.max(1, Math.min(requestedPageCount - fixedSlideCount, Math.ceil(facts.length / 8) || 1));
+    const requiredCareerSlides = Math.max(1, Math.min(requestedPageCount - fixedSlideCount, Math.ceil(facts.length / 6) || 1));
     const featureVisualCount = requiredProgramSlides + requiredTeamSlides;
     const availableGalleryVisualCount = Math.max(0, galleryVisualAssets.length - featureVisualCount);
     const requiredGallerySlides = Math.min(5, availableGalleryVisualCount, Math.max(0, requestedPageCount - fixedSlideCount - requiredCareerSlides));
@@ -432,8 +435,8 @@ export async function POST(request: Request) {
       slide.title = distinctCareerSectionTitle(baseTitle, occurrence);
       slide.body = "";
       slide.bullets = [];
-      slide.imageRefs = [];
-      slide.layout = "timeline";
+      slide.imageRefs = slide.imageRefs.slice(0, 1);
+      slide.layout = ["split_left", "split_right"].includes(slide.layout) ? slide.layout : "timeline";
     });
 
     while (plan.slides.length > targetPageCount) {
@@ -484,6 +487,10 @@ export async function POST(request: Request) {
       }
       return undefined;
     };
+    const pickForSlide = (slide: z.infer<typeof slideSchema> | undefined, ...predicates: Array<(asset: AssetInput) => boolean>) => {
+      const requested = slide?.imageRefs.map((id) => visualAssets.find((asset) => asset.id === id)).find((asset): asset is AssetInput => Boolean(asset && !assignedImageIds.has(asset.id) && predicates.some((predicate) => predicate(asset))));
+      return requested || pickUnused(...predicates);
+    };
     const assignImage = (slide: z.infer<typeof slideSchema> | undefined, asset: AssetInput | undefined, purposeText: string) => {
       if (!slide) return;
       slide.imageRefs = asset ? [asset.id] : [];
@@ -492,34 +499,34 @@ export async function POST(request: Request) {
     };
     const remainingStageCount = () => galleryVisualAssets.filter((asset) => !assignedImageIds.has(asset.id)).length;
 
-    const coverAsset = pickUnused(
+    const coverAsset = pickForSlide(cover,
       (asset) => asset.kind === "representative" && asset.visualType !== "graphic" && (asset.visualRole !== "stage" || remainingStageCount() > gallerySlides.length + featureSlides.length),
       (asset) => asset.visualRole === "portrait" && asset.visualType !== "graphic",
       (asset) => asset.origin === "representative" && asset.visualType !== "graphic" && (asset.visualRole !== "stage" || remainingStageCount() > gallerySlides.length + featureSlides.length),
     );
     assignImage(cover, coverAsset, "아티스트의 정체성을 한 번에 전달하는 대표 사진");
-    cover.layout = canUseFullBleed(coverAsset) ? "full_bleed" : "split_right";
+    cover.layout = cover.layout === "full_bleed" && canUseFullBleed(coverAsset) ? "full_bleed" : ["split_left", "split_right"].includes(cover.layout) ? cover.layout : "split_right";
 
-    const aboutAsset = pickUnused(
+    const aboutAsset = pickForSlide(about,
       (asset) => asset.visualRole === "portrait" && asset.visualType !== "graphic",
       (asset) => asset.visualRole === "other" && asset.visualType !== "graphic",
       (asset) => asset.visualRole === "stage" && asset.visualType !== "graphic" && remainingStageCount() > gallerySlides.length + featureSlides.length,
     );
     assignImage(about, aboutAsset, "소개문과 실제 활동 인상을 함께 전달하는 사진");
-    if (about) about.layout = "split_left";
+    if (about) about.layout = ["split_left", "split_right"].includes(about.layout) ? about.layout : "split_left";
 
     featureSlides.forEach((slide, index) => {
-      const selected = pickUnused(
+      const selected = pickForSlide(slide,
         (asset) => asset.visualRole === "stage" && asset.visualType !== "graphic",
         (asset) => asset.visualRole === "other" && asset.visualType !== "graphic",
       );
       assignImage(slide, selected, slide.type === "program" ? "레퍼토리의 장르와 무대 분위기를 보여주는 실제 활동 사진" : "출연 인원과 팀 구성을 한눈에 보여주는 단체 활동 사진");
-      slide.layout = index % 2 ? "split_left" : "split_right";
+      slide.layout = ["split_left", "split_right"].includes(slide.layout) ? slide.layout : index % 2 ? "split_left" : "split_right";
     });
 
     const genericGalleryTitles = ["무대에서 드러나는 아티스트의 색", "현장 호흡으로 완성되는 무대", "공간의 분위기를 이끄는 장면", "관객과 만나는 대표 무대", "행사의 인상을 남기는 순간"];
     gallerySlides.forEach((slide, index) => {
-      const selected = pickUnused((asset) => asset.visualRole === "stage" && asset.visualType !== "graphic");
+      const selected = pickForSlide(slide, (asset) => asset.visualRole === "stage" && asset.visualType !== "graphic");
       assignImage(slide, selected, "고객이 현장 분위기와 무대 적합성을 판단할 수 있는 실제 활동 사진");
       const matchedFact = selected
         ? [...factsByIndex.entries()].find(([, fact]) => isDirectAssetFactMatch(selected, fact))
@@ -528,26 +535,26 @@ export async function POST(request: Request) {
       const copy = galleryFactCopy(matchedFact?.[1]);
       slide.title = matchedFact ? copy.title : genericGalleryTitles[index % genericGalleryTitles.length];
       slide.body = matchedFact ? copy.body : "실제 활동 사진으로 무대 분위기와 표현 방식을 확인할 수 있습니다.";
-      slide.layout = canUseFullBleed(selected) && index % 3 === 0 ? "full_bleed" : index % 2 ? "split_left" : "split_right";
+      slide.layout = slide.layout === "full_bleed" && canUseFullBleed(selected) ? "full_bleed" : ["split_left", "split_right", "gallery"].includes(slide.layout) ? slide.layout : index % 2 ? "split_left" : "split_right";
     });
 
-    assignImage(proposal, pickUnused(
+    assignImage(proposal, pickForSlide(proposal,
       (asset) => asset.visualRole === "stage" && asset.visualType !== "graphic",
       (asset) => asset.visualType !== "graphic" && asset.visualRole !== "portrait",
     ), "제안 가능한 무대 구성과 현장 실행력을 보여주는 활동 사진");
-    if (proposal) proposal.layout = "split_right";
+    if (proposal) proposal.layout = ["split_left", "split_right"].includes(proposal.layout) ? proposal.layout : "split_right";
 
     careerSlides.forEach((slide, index) => {
-      const selected = slide.careerIndexes.length > 5 ? undefined : pickUnused(
+      const selected = slide.careerIndexes.length > 3 ? undefined : pickForSlide(slide,
         (asset) => asset.visualType === "graphic" && (asset.visualRole === "history" || asset.visualRole === "poster"),
         (asset) => asset.visualRole === "poster" || asset.visualRole === "history",
         (asset) => asset.visualType !== "graphic" && asset.visualRole !== "portrait",
       );
       assignImage(slide, selected, "해당 경력의 맥락을 보조하는 포스터·연혁 자료 또는 활동 사진");
-      slide.layout = selected ? index % 2 ? "split_left" : "split_right" : "timeline";
+      slide.layout = selected ? ["split_left", "split_right"].includes(slide.layout) ? slide.layout : index % 2 ? "split_left" : "split_right" : "timeline";
     });
 
-    assignImage(contact, pickUnused(
+    assignImage(contact, pickForSlide(contact,
       (asset) => asset.visualRole === "portrait" && asset.visualType !== "graphic",
       (asset) => asset.visualType !== "graphic",
     ), "제안 검토 후에도 아티스트를 기억하게 만드는 마무리 사진");
@@ -555,7 +562,7 @@ export async function POST(request: Request) {
     contact.title = "가능 일정과 출연 조건을 확인해 보세요";
     contact.body = [body.profile.primaryField, body.profile.purpose, body.profile.region].filter(Boolean).join(" · ");
     contact.bullets = [body.profile.contact, body.profile.videoUrl].filter(Boolean).map(String).slice(0, 2);
-    contact.layout = "split_right";
+    contact.layout = ["split_left", "split_right"].includes(contact.layout) ? contact.layout : "split_right";
     const seenCopy = new Set<string>();
     plan.slides.forEach((slide) => {
       const budget = copyBudgets[slide.type];

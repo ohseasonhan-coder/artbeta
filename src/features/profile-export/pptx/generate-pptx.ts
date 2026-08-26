@@ -4,7 +4,7 @@ import { buildDeckFacts, formatCareerFact, rankDeckFactIndexes, type DeckFact } 
 import { hasConfirmedBookingConditions } from "./booking-conditions";
 import { buildDecisionHookBullets, buildDecisionHookTitle, hasStrongDecisionHooks } from "./decision-hooks";
 import { renderDeckQaFrames } from "./deck-visual-qa";
-import { compactKoreanText, fitKoreanTextBox, koreanTextWidth, normalizeKoreanDisplayText, oneLineKoreanText } from "./korean-typesetting";
+import { compactKoreanText, fitKoreanTextBox, fitKoreanTextBoxInches, koreanTextWidth, normalizeKoreanDisplayText, oneLineKoreanText } from "./korean-typesetting";
 
 const hex = (value: string) => value.replace("#", "");
 
@@ -209,22 +209,33 @@ function oneLineText(value: string, max: number) {
 }
 
 function clampPlanText(slide: DeckSlidePlan): DeckSlidePlan {
+  const hasImage = slide.imageRefs.length > 0;
   const layout = {
-    cover: { title: [14, 2], body: [23, 2] },
-    about: { title: [20, 2], body: [32, 4] },
-    strengths: { title: [26, 1], body: [0, 0] },
-    program: { title: [20, 2], body: [32, 2] },
-    team: { title: [20, 2], body: [32, 2] },
-    gallery: { title: [15, 2], body: [22, 3] },
-    career: { title: [26, 1], body: [0, 0] },
-    contact: { title: [19, 2], body: [42, 1] },
+    cover: { title: [hasImage ? 5.65 : 8.8, 2.1, 2, hasImage ? 50 : 54, 38], body: [hasImage ? 5.65 : 8.2, .78, 2, 22, 18] },
+    about: { title: [hasImage ? 5.9 : 11.4, 1.5, 2, hasImage ? 35 : 38, 30], body: [hasImage ? 5.55 : 8.8, 1.75, 4, 18, 16] },
+    strengths: { title: [hasImage ? 7.2 : 11.4, 1.04, 2, hasImage ? 35 : 38, 30], body: [0, 0, 0, 0, 0] },
+    program: { title: [hasImage ? 7.05 : 11.4, 1.0, 2, 37, 30], body: [hasImage ? 7 : 11.2, .42, 1, 16, 14] },
+    team: { title: [hasImage ? 6.05 : 11.4, 1.12, 2, 37, 30], body: [hasImage ? 5.95 : 11.2, .42, 1, 16, 14] },
+    gallery: { title: [hasImage ? 4.05 : 8.8, 1.55, 2, 40, 31], body: [hasImage ? 3.85 : 8.8, 1.1, 3, 18, 15] },
+    career: { title: [hasImage ? 7.25 : 11.35, .92, 2, hasImage ? 35 : 38, 29], body: [0, 0, 0, 0, 0] },
+    contact: { title: [hasImage ? 7.15 : 11.4, 1.38, 2, hasImage ? 39 : 44, 32], body: [hasImage ? 7.15 : 11.4, .5, 1, 17, 15] },
   } as const;
   const budget = layout[slide.type];
+  const fit = (value: string, box: readonly [number, number, number, number, number]) => box[0]
+    ? fitKoreanTextBoxInches(value, { widthInches: box[0], heightInches: box[1], maxLines: box[2], preferredFontSize: box[3], minFontSize: box[4] }).text
+    : "";
+  const bulletBox = slide.type === "strengths"
+    ? [hasImage ? 5.55 : 8.6, .78, 2, hasImage ? 19 : 22, 16] as const
+    : slide.type === "program"
+      ? [hasImage ? 2.83 : 3.13, .42, 1, 18, 15] as const
+      : slide.type === "team"
+        ? [hasImage ? 5.27 : 10.5, .42, 1, 18, 15] as const
+        : [hasImage ? 5.5 : 8.8, .36, 1, 16, 14] as const;
   return {
     ...slide,
-    title: wrapTextAtWords(slide.title, budget.title[0], budget.title[1]),
-    body: budget.body[0] ? wrapTextAtWords(slide.body, budget.body[0], budget.body[1]) : "",
-    bullets: slide.bullets.map((item) => wrapTextAtWords(item, slide.type === "strengths" ? 26 : slide.type === "about" ? 38 : slide.type === "program" ? 30 : 34, slide.type === "about" || slide.type === "program" || slide.type === "team" ? 1 : 2)),
+    title: fit(slide.title, budget.title),
+    body: fit(slide.body, budget.body),
+    bullets: slide.bullets.map((item) => fit(item, bulletBox)),
   };
 }
 
@@ -437,7 +448,7 @@ function paginateSlideCopy(slides: DeckSlidePlan[], profile: ProfileData) {
         title: distinctCareerSlideTitle(baseTitle, occurrence),
         careerIndexes,
         imageRefs: pageIndex || pageTextWeight > 5.2 ? [] : slide.imageRefs,
-        layout: "timeline" as const,
+        layout: pageIndex || pageTextWeight > 5.2 ? "timeline" as const : slide.layout,
       };
     });
   });
@@ -455,7 +466,7 @@ function fitSlideCopy(slide: DeckSlidePlan): DeckSlidePlan {
     title: compactText(slide.title, slide.imageRefs.length && ["about", "contact"].includes(slide.type) ? Math.min(title, 22) : title),
     body: compactText(slide.body, body),
     bullets: slide.bullets.slice(0, bulletCount).map((item) => compactText(item, bulletLength)),
-    careerIndexes: slide.careerIndexes.slice(0, slide.type === "career" ? 8 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0),
+    careerIndexes: slide.careerIndexes.slice(0, slide.type === "career" ? 6 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0),
     imageRefs: slide.imageRefs.slice(0, 1),
   };
 }
@@ -655,67 +666,66 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
 
 function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: ProfileData): DeckPlan {
   if (!assets.length) return { ...plan, slides: plan.slides.map((slide) => ({ ...slide, imageRefs: [] })) };
-  let slides: DeckSlidePlan[] = plan.slides.map((slide) => ({ ...slide, bullets: [...slide.bullets], careerIndexes: [...slide.careerIndexes], imageRefs: [] }));
-  const coverIndex = slides.findIndex((slide) => slide.type === "cover");
-  if (coverIndex < 0) slides.unshift({ type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: [], imagePurpose: "대표사진", careerIndexes: [], layout: "split_right" });
-  const normalizedCoverIndex = slides.findIndex((slide) => slide.type === "cover");
-  const available = [...assets];
-  const careerSlideCount = slides.filter((slide) => slide.type === "career" && slide.careerIndexes.length).length;
-  const offerSlideCount = slides.filter((slide) => slide.type === "program" || slide.type === "team").length;
-  const desiredGalleryCount = Math.min(5, Math.max(0, profile.pageCount - 4 - offerSlideCount - careerSlideCount));
+  const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
   const preferredRoles: Record<DeckSlidePlan["type"], ProfileVisualRole[]> = {
     cover: ["portrait", "stage", "other"],
     about: ["stage", "portrait", "other"],
     strengths: ["stage", "other", "portrait"],
     program: ["stage", "other", "portrait"],
     team: ["stage", "other", "portrait"],
-    gallery: ["stage", "poster", "other"],
+    gallery: ["stage", "other"],
     career: ["history", "poster", "stage", "other"],
     contact: ["portrait", "stage", "other"],
   };
+  const assetFitsSlide = (asset: VisualAsset, type: DeckSlidePlan["type"]) => {
+    const role = asset.visualRole || "other";
+    if (!preferredRoles[type].includes(role)) return false;
+    if (["cover", "about", "strengths", "program", "team", "gallery", "contact"].includes(type) && asset.visualType === "graphic") return false;
+    return true;
+  };
+  const used = new Set<string>();
+  let slides: DeckSlidePlan[] = plan.slides.map((slide) => {
+    const selectedId = slide.imageRefs.find((id) => {
+      const asset = assetMap.get(id);
+      return Boolean(asset && !used.has(id) && assetFitsSlide(asset, slide.type) && (slide.type !== "career" || slide.careerIndexes.length <= 3));
+    });
+    if (selectedId) used.add(selectedId);
+    const selected = selectedId ? assetMap.get(selectedId) : undefined;
+    const fallbackLayout = slide.type === "career" ? "timeline" : slide.type === "gallery" ? "gallery" : "editorial";
+    const layout = slide.layout === "full_bleed" && (!selected || !canUseAsBackground(selected, slide.type)) ? fallbackLayout : slide.layout;
+    return { ...slide, bullets: [...slide.bullets], careerIndexes: [...slide.careerIndexes], imageRefs: selectedId ? [selectedId] : [], layout };
+  });
+  const coverIndex = slides.findIndex((slide) => slide.type === "cover");
+  if (coverIndex < 0) slides.unshift({ type: "cover", eyebrow: "ARTIST PROFILE", title: profile.artistName || "ARTIST", body: profile.tagline, bullets: [], imageRefs: [], imagePurpose: "대표사진", careerIndexes: [], layout: "split_right" });
+  const normalizedCoverIndex = slides.findIndex((slide) => slide.type === "cover");
+  const available = assets.filter((asset) => !used.has(asset.id));
   const takeAsset = (type: DeckSlidePlan["type"]) => {
     for (const role of preferredRoles[type]) {
-      const remainingStageCount = available.filter((asset) => asset.visualRole === "stage" && asset.visualType !== "graphic").length;
-      const index = available.findIndex((asset) => (asset.visualRole || "other") === role
-        && (role !== "stage" || type === "gallery" || remainingStageCount > desiredGalleryCount));
-      if (index >= 0) return available.splice(index, 1)[0];
+      const index = available.findIndex((asset) => (asset.visualRole || "other") === role && assetFitsSlide(asset, type));
+      if (index >= 0) {
+        const selected = available.splice(index, 1)[0];
+        used.add(selected.id);
+        return selected;
+      }
     }
     return undefined;
   };
-  const coverAsset = takeAsset("cover");
+  const existingCover = slides[normalizedCoverIndex].imageRefs[0] ? assetMap.get(slides[normalizedCoverIndex].imageRefs[0]) : undefined;
+  const coverAsset = existingCover || takeAsset("cover");
   if (coverAsset) {
     slides[normalizedCoverIndex].imageRefs = [coverAsset.id];
-    if (canUseAsBackground(coverAsset, "cover")) slides[normalizedCoverIndex].layout = "full_bleed";
+    if (slides[normalizedCoverIndex].layout === "full_bleed" && !canUseAsBackground(coverAsset, "cover")) slides[normalizedCoverIndex].layout = "split_right";
   }
 
-  let primaryAboutIndex = -1;
-  if (available.length) {
-    let aboutIndex = slides.findIndex((slide) => slide.type === "about");
-    if (aboutIndex < 0) {
-      slides.splice(normalizedCoverIndex + 1, 0, { type: "about", eyebrow: "ARTIST IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: profile.introduction, bullets: aboutProofBullets(profile), imageRefs: [], imagePurpose: "대표 활동사진", careerIndexes: [], layout: "split_right" });
-      aboutIndex = normalizedCoverIndex + 1;
-    }
+  let aboutIndex = slides.findIndex((slide) => slide.type === "about");
+  if (aboutIndex < 0) {
+    slides.splice(normalizedCoverIndex + 1, 0, { type: "about", eyebrow: "ARTIST IDENTITY", title: profile.tagline || `${profile.primaryField}로 만드는 무대`, body: profile.introduction, bullets: aboutProofBullets(profile), imageRefs: [], imagePurpose: "대표 활동사진", careerIndexes: [], layout: "split_right" });
+    aboutIndex = normalizedCoverIndex + 1;
+  }
+  if (!slides[aboutIndex].imageRefs.length) {
     const aboutAsset = takeAsset("about");
     if (aboutAsset) slides[aboutIndex].imageRefs = [aboutAsset.id];
-    primaryAboutIndex = aboutIndex;
   }
-
-  const requiredGalleryAssets = available.filter((asset) => asset.visualRole === "stage" && asset.visualType !== "graphic").slice(0, desiredGalleryCount);
-  const requiredGalleryIds = new Set(requiredGalleryAssets.map((asset) => asset.id));
-  for (let index = available.length - 1; index >= 0; index -= 1) {
-    if (requiredGalleryIds.has(available[index].id)) available.splice(index, 1);
-  }
-  const reservedGalleryAssets = [...requiredGalleryAssets];
-  let galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
-  while (galleryIndexes.length < requiredGalleryAssets.length) {
-    const insertAt = slides.findIndex((slide) => slide.type === "career" || slide.type === "contact");
-    slides.splice(insertAt >= 0 ? insertAt : slides.length, 0, { type: "gallery", eyebrow: "SIGNATURE MOMENT", title: galleryIndexes.length ? "또 하나의 대표 장면" : "이 무대를 기억하게 만드는 순간", body: "", bullets: [], imageRefs: [], imagePurpose: "대표 활동을 보여주는 강한 사진 한 장", careerIndexes: [], layout: "gallery" });
-    galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
-  }
-  const allowedGalleryIndexes = new Set(galleryIndexes.slice(0, requiredGalleryAssets.length));
-  slides = slides.filter((slide, index) => slide.type !== "gallery" || allowedGalleryIndexes.has(index));
-  galleryIndexes = slides.map((slide, index) => slide.type === "gallery" ? index : -1).filter((index) => index >= 0);
-  let stageGalleryCount = 0;
   const deckFacts = buildDeckFacts(profile);
   const normalizedTokenSet = (value: string) => new Set(value.toLowerCase().replace(/[^0-9a-z가-힣\s]/g, " ").split(/\s+/).filter((token) => token.length >= 2));
   const matchingFactIndexes = (asset: VisualAsset) => deckFacts.map((fact, factIndex) => {
@@ -727,24 +737,19 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
     score += [...assetTokens].filter((token) => factTokens.has(token)).length * 12;
     return { factIndex, score };
   }).filter((candidate) => candidate.score >= 24).sort((left, right) => right.score - left.score).slice(0, 1).map(({ factIndex }) => factIndex);
-  slides.forEach((slide, index) => {
-    if (slide.type === "cover" || index === primaryAboutIndex) return;
+  let stageGalleryCount = 0;
+  slides.forEach((slide) => {
+    if (slide.type === "cover" || slide.type === "about") return;
     const careerTextWeight = slide.type === "career"
       ? slide.careerIndexes.reduce((total, factIndex) => total + careerFactVisualWeight(deckFacts[factIndex]), 0)
       : 0;
-    const asset = slide.type === "gallery" ? reservedGalleryAssets.shift() : slide.type === "career" && (slide.careerIndexes.length > 4 || careerTextWeight > 4.65) ? undefined : takeAsset(slide.type);
+    const existing = slide.imageRefs[0] ? assetMap.get(slide.imageRefs[0]) : undefined;
+    const asset = existing || (slide.type === "career" && (slide.careerIndexes.length > 3 || careerTextWeight > 4.65) ? undefined : takeAsset(slide.type));
     slide.imageRefs = asset ? [asset.id] : [];
-    if (slide.type === "gallery") slide.careerIndexes = asset ? matchingFactIndexes(asset) : [];
+    if (slide.type === "gallery" && asset && !slide.careerIndexes.length) slide.careerIndexes = matchingFactIndexes(asset);
     slide.imagePurpose ||= slide.type === "career" ? "해당 활동과 연결되는 현장 사진" : slide.type === "contact" ? "아티스트를 기억하게 만드는 마무리 사진" : "페이지 메시지를 뒷받침하는 활동 사진";
-    if (slide.type === "gallery" && asset?.visualRole === "poster") {
-      slide.eyebrow = "공연 레퍼런스";
-      slide.title = "대표 출연작과 공연 활동";
-      slide.body = "실제 출연작과 공연 포스터를 한눈에 확인합니다.";
-    } else if (slide.type === "gallery" && asset?.visualRole === "history") {
-      slide.eyebrow = "활동 증빙";
-      slide.title = "공연 기록으로 보는 활동 범위";
-      slide.body = "수상·공연·방송 기록을 한눈에 확인합니다.";
-    } else if (slide.type === "gallery" && asset?.visualRole === "stage") {
+    const genericGalleryCopy = /^(대표 활동|실제 활동|또 하나의 대표 장면|이 무대를 기억|무대에서 드러나는|현장 호흡|공간의 분위기|관객과 만나는|행사의 인상)/.test(slide.title.trim());
+    if (slide.type === "gallery" && asset?.visualRole === "stage" && genericGalleryCopy) {
       const stageTitles = ["대표 무대에서 확인한 공연 역량", "행사 규모에 맞춘 현장 구성", "관객과 호흡하는 대표 장면"];
       const stageBodies = ["공연 전경과 출연 구성을 한눈에 확인합니다.", "행사 성격과 관객층에 맞춰 무대를 구성합니다.", "실제 현장의 분위기와 관객 접점을 보여줍니다."];
       const fact = slide.careerIndexes.map((factIndex) => deckFacts[factIndex]).find(Boolean);
@@ -756,7 +761,7 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
         : stageBodies[stageGalleryCount % stageBodies.length];
       stageGalleryCount += 1;
     }
-    slide.layout = asset && canUseAsBackground(asset, slide.type) ? "full_bleed" : index % 2 ? "split_right" : "split_left";
+    if (slide.layout === "full_bleed" && (!asset || !canUseAsBackground(asset, slide.type))) slide.layout = slide.type === "gallery" ? "gallery" : slide.type === "career" ? "timeline" : "editorial";
   });
   return { ...plan, slides };
 }
@@ -899,7 +904,7 @@ async function runVisualReviewLoop(plan: DeckPlan, profile: ProfileData, assets:
   let issues: string[] = [];
   let version = "";
   let dimensionScores: Record<DeckQualityDimensionId, number> = { content: 0, typography: 0, imagery: 0, design: 0, persuasion: 0 };
-  for (let iteration = 1; iteration <= 2; iteration += 1) {
+  for (let iteration = 1; iteration <= 1; iteration += 1) {
     const review = await requestDeckVisualReview(current, profile, assets, iteration);
     iterations = iteration;
     score = review.overallScore;
@@ -1008,8 +1013,18 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     .filter((id) => assetMap.has(id))
     .map((id) => assetMap.get(id)!);
   const addImage = (slide: ReturnType<typeof pptx.addSlide>, asset: VisualAsset, x: number, y: number, w: number, h: number, alt: string, mode: "contain" | "cover" = "contain") => {
-    if (mode === "contain") slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: { color: hex(p.surface) }, line: { color: hex(p.muted), transparency: 85, width: 0.5 } });
-    slide.addImage({ data: asset.dataUrl, x, y, w, h, sizing: { type: mode, w, h }, altText: alt || `${profile.artistName} 활동 이미지` });
+    const sourceRatio = asset.pixelWidth && asset.pixelHeight ? asset.pixelWidth / asset.pixelHeight : 0;
+    const frameRatio = w / h;
+    const ratioMismatch = sourceRatio ? Math.max(sourceRatio / frameRatio, frameRatio / sourceRatio) : 1;
+    const safeMode = mode === "cover" && (asset.visualType === "graphic" || asset.visualRole === "portrait" || ratioMismatch > 1.42) ? "contain" : mode;
+    if (safeMode === "contain") {
+      slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: { color: hex(p.surface) }, line: { color: hex(p.muted), transparency: 85, width: 0.5 } });
+      const drawW = sourceRatio && sourceRatio > frameRatio ? w : sourceRatio ? h * sourceRatio : w;
+      const drawH = sourceRatio && sourceRatio > frameRatio ? w / sourceRatio : h;
+      slide.addImage({ data: asset.dataUrl, x: x + (w - drawW) / 2, y: y + (h - drawH) / 2, w: drawW, h: drawH, altText: alt || `${profile.artistName} 활동 이미지` });
+    } else {
+      slide.addImage({ data: asset.dataUrl, x, y, w, h, sizing: { type: "cover", w, h }, altText: alt || `${profile.artistName} 활동 이미지` });
+    }
     if (asset.kind === "generated") slide.addText("AI 연출 이미지", { x: x + 0.12, y: y + h - 0.34, w: 1.18, h: 0.22, fontSize: 7, bold: true, color: "FFFFFF", fill: { color: "1B4D3E", transparency: 8 }, margin: 0.04, align: "center", breakLine: false });
   };
   const addFooter = (slide: ReturnType<typeof pptx.addSlide>, index: number) => {
@@ -1035,8 +1050,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     slide.addText("주요 활동", { x, y: 6.63, w: 0.82, h: 0.2, fontSize: 8, bold: true, color: hex(p.accent), margin: 0 });
     slide.addText(oneLineText([evidence.date !== "—" ? evidence.date : "", evidence.title, evidence.meta].filter(Boolean).join(" · "), 72), { x: x + 0.98, y: 6.6, w: Math.max(1, w - 0.98), h: 0.27, fontSize: 9, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
   };
-  const fittedText = (value: string, maxWidth: number, maxLines: number, preferredFontSize: number, minFontSize: number) =>
-    fitKoreanTextBox(value, { maxWidth, maxLines, preferredFontSize, minFontSize });
+  const fittedText = (value: string, widthInches: number, heightInches: number, maxLines: number, preferredFontSize: number, minFontSize: number) =>
+    fitKoreanTextBoxInches(value, { widthInches, heightInches, maxLines, preferredFontSize, minFontSize });
   plan.slides.forEach((slidePlan, slideIndex) => {
     const slide = pptx.addSlide();
     const images = pickImages(slidePlan);
@@ -1060,8 +1075,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (isCover && backgroundImage) {
       addEyebrow(slide, slidePlan.eyebrow, true);
-      const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", 14, 2, 54, 40);
-      const coverBody = fittedText(slidePlan.body || profile.tagline, 24, 2, 22, 18);
+      const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", 6.15, 2.05, 2, 54, 40);
+      const coverBody = fittedText(slidePlan.body || profile.tagline, 5.95, .82, 2, 22, 18);
       slide.addText(coverTitle.text, { x: 0.78, y: 1.5, w: 6.15, h: 2.05, fontSize: coverTitle.fontSize, bold: true, color: "FFFFFF", margin: 0, valign: "middle", fit: "shrink" });
       slide.addText(coverBody.text, { x: 0.82, y: 4.02, w: 5.95, h: 0.82, fontSize: coverBody.fontSize, color: "FFFFFF", transparency: 10, margin: 0, fit: "shrink" });
       slide.addShape(pptx.ShapeType.line, { x: 0.82, y: 5.48, w: 1.25, h: 0, line: { color: hex(p.accent), width: 3 } });
@@ -1082,8 +1097,8 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         slide.addText(oneLineText(profile.primaryField || "ARTIST", 18), { x: 10.42, y: 5.45, w: 1.98, h: 0.42, fontSize: 14, bold: true, color: hex(p.accent), margin: 0, align: "center", fit: "shrink" });
       }
       addEyebrow(slide, slidePlan.eyebrow, false, copyX);
-      const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", primaryImage ? 14 : 20, 2, primaryImage ? 50 : 54, 38);
-      const coverBody = fittedText(slidePlan.body || profile.tagline, primaryImage ? 23 : 34, 2, 22, 18);
+      const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", copyW, 2.1, 2, primaryImage ? 50 : 54, 38);
+      const coverBody = fittedText(slidePlan.body || profile.tagline, primaryImage ? 5.65 : 8.2, .78, 2, 22, 18);
       slide.addText(coverTitle.text, { x: copyX, y: 1.55, w: copyW, h: 2.1, fontSize: coverTitle.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
       slide.addText(coverBody.text, { x: copyX + 0.04, y: 4.05, w: primaryImage ? 5.65 : 8.2, h: 0.78, fontSize: coverBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
       slide.addShape(pptx.ShapeType.line, { x: copyX + 0.04, y: 5.55, w: primaryImage ? 1.1 : 1.65, h: 0, line: { color: hex(p.accent), width: 3 } });
@@ -1093,16 +1108,22 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
 
     if (slidePlan.type === "gallery" && backgroundImage) {
       addEyebrow(slide, slidePlan.eyebrow, true);
-      slide.addText(wrapTextAtWords(slidePlan.title, 15, 2), { x: 0.78, y: 1.3, w: 5.7, h: 1.7, fontSize: 44, bold: true, color: "FFFFFF", margin: 0, valign: "middle", fit: "shrink" });
-      if (slidePlan.body) slide.addText(wrapTextAtWords(slidePlan.body, 27, 3), { x: 0.82, y: 3.42, w: 5.45, h: 1.15, fontSize: 19, color: "FFFFFF", transparency: 10, margin: 0, valign: "middle", fit: "shrink" });
+      const galleryHeading = fittedText(slidePlan.title, 5.7, 1.7, 2, 44, 32);
+      const galleryBody = fittedText(slidePlan.body, 5.45, 1.15, 3, 19, 16);
+      slide.addText(galleryHeading.text, { x: 0.78, y: 1.3, w: 5.7, h: 1.7, fontSize: galleryHeading.fontSize, bold: true, color: "FFFFFF", margin: 0, valign: "middle", fit: "shrink" });
+      if (slidePlan.body) slide.addText(galleryBody.text, { x: 0.82, y: 3.42, w: 5.45, h: 1.15, fontSize: galleryBody.fontSize, color: "FFFFFF", transparency: 10, margin: 0, valign: "middle", fit: "shrink" });
       return;
     }
 
     if (slidePlan.type === "gallery") {
-      addEyebrow(slide, slidePlan.eyebrow);
-      slide.addText(wrapTextAtWords(slidePlan.title, 15, 2), { x: 0.78, y: 1.28, w: 4.05, h: 1.55, fontSize: 40, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
-      if (slidePlan.body) slide.addText(wrapTextAtWords(slidePlan.body, 22, 3), { x: 0.82, y: 3.25, w: 3.85, h: 1.1, fontSize: 18, color: hex(p.muted), margin: 0, breakLine: false, valign: "middle", fit: "shrink" });
-      if (primaryImage) addImage(slide, primaryImage, 5.15, 0.52, 7.45, 6.32, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      const imageOnLeft = primaryImage && slidePlan.layout === "split_left";
+      const copyX = imageOnLeft ? 8.55 : 0.78;
+      addEyebrow(slide, slidePlan.eyebrow, false, copyX);
+      const galleryHeading = fittedText(slidePlan.title, 4.05, 1.55, 2, 40, 31);
+      const galleryBody = fittedText(slidePlan.body, 3.85, 1.1, 3, 18, 15);
+      slide.addText(galleryHeading.text, { x: copyX, y: 1.28, w: 4.05, h: 1.55, fontSize: galleryHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      if (slidePlan.body) slide.addText(galleryBody.text, { x: copyX + 0.04, y: 3.25, w: 3.85, h: 1.1, fontSize: galleryBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, valign: "middle", fit: "shrink" });
+      if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.45 : 5.15, 0.52, 7.45, 6.32, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       else {
         slide.addShape(pptx.ShapeType.rect, { x: 5.15, y: 0.52, w: 7.45, h: 6.32, fill: { color: hex(p.surface), transparency: 18 }, line: { color: hex(p.accent), transparency: 72, width: 0.7 } });
         const galleryFact = slidePlan.careerIndexes.map((index) => deckFacts[index]).find(Boolean);
@@ -1116,11 +1137,14 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     }
 
     if (slidePlan.type === "program") {
-      addEyebrow(slide, slidePlan.eyebrow || "공연 프로그램");
-      const programTitle = fittedText(slidePlan.title, primaryImage ? 18 : 24, 2, 37, 31);
-      slide.addText(programTitle.text, { x: 0.78, y: 1.1, w: primaryImage ? 7.05 : 11.4, h: 1.0, fontSize: programTitle.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
-      if (slidePlan.body) slide.addText(oneLineText(slidePlan.body, 50), { x: 0.82, y: 2.2, w: primaryImage ? 7.0 : 11.2, h: 0.35, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
-      if (primaryImage) addImage(slide, primaryImage, 8.35, 0.72, 4.35, 6.08, slidePlan.imagePurpose, "cover");
+      const imageOnLeft = primaryImage && slidePlan.layout === "split_left";
+      const copyX = imageOnLeft ? 5.18 : 0.78;
+      const copyW = primaryImage ? 7.05 : 11.4;
+      addEyebrow(slide, slidePlan.eyebrow || "공연 프로그램", false, copyX);
+      const programTitle = fittedText(slidePlan.title, copyW, 1, 2, 37, 30);
+      slide.addText(programTitle.text, { x: copyX, y: 1.1, w: copyW, h: 1.0, fontSize: programTitle.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      if (slidePlan.body) slide.addText(oneLineText(slidePlan.body, 50), { x: copyX + 0.04, y: 2.2, w: primaryImage ? 7.0 : 11.2, h: 0.35, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
+      if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 8.35, 0.72, 4.35, 6.08, slidePlan.imagePurpose, "cover");
       const items = slidePlan.bullets.slice(0, 6);
       const columns = primaryImage ? 2 : 3;
       const columnWidth = primaryImage ? 3.35 : 3.65;
@@ -1128,10 +1152,10 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       items.forEach((item, index) => {
         const column = Math.floor(index / rows);
         const row = index % rows;
-        const x = 0.82 + column * (columnWidth + 0.25);
+        const x = copyX + 0.04 + column * (columnWidth + 0.25);
         const y = 2.9 + row * 1.02;
         slide.addText(String(index + 1).padStart(2, "0"), { x, y, w: 0.42, h: 0.26, fontSize: 10, bold: true, color: hex(p.accent), margin: 0 });
-        const itemFit = fittedText(item, primaryImage ? 24 : 28, 1, 18, 16);
+        const itemFit = fittedText(item, columnWidth - 0.52, .34, 1, 18, 15);
         slide.addText(itemFit.text, { x: x + 0.52, y: y - 0.02, w: columnWidth - 0.52, h: 0.34, fontSize: itemFit.fontSize, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x, y: y + 0.48, w: columnWidth, h: 0, line: { color: hex(p.muted), transparency: 76, width: 0.7 } });
       });
@@ -1145,13 +1169,13 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       const copyW = primaryImage ? 6.05 : 11.4;
       if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 8.12, 0.5, 4.8, 6.45, slidePlan.imagePurpose, "cover");
       addEyebrow(slide, slidePlan.eyebrow || "출연 구성", false, copyX);
-      const teamTitle = fittedText(slidePlan.title, primaryImage ? 17 : 24, 2, 37, 31);
+      const teamTitle = fittedText(slidePlan.title, copyW, 1.12, 2, 37, 30);
       slide.addText(teamTitle.text, { x: copyX, y: 1.15, w: copyW, h: 1.12, fontSize: teamTitle.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (slidePlan.body) slide.addText(oneLineText(slidePlan.body, 46), { x: copyX + 0.04, y: 2.48, w: copyW - 0.1, h: 0.34, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
       slidePlan.bullets.slice(0, 4).forEach((item, index) => {
         const y = 3.2 + index * 0.78;
         slide.addText(String(index + 1).padStart(2, "0"), { x: copyX + 0.04, y, w: 0.45, h: 0.28, fontSize: 11, bold: true, color: hex(p.accent), margin: 0 });
-        const itemFit = fittedText(item, primaryImage ? 34 : 54, 1, 18, 16);
+        const itemFit = fittedText(item, copyW - 0.78, .36, 1, 18, 15);
         slide.addText(itemFit.text, { x: copyX + 0.68, y: y - 0.03, w: copyW - 0.78, h: 0.36, fontSize: itemFit.fontSize, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x: copyX + 0.68, y: y + 0.47, w: copyW - 0.82, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.65 } });
       });
@@ -1160,10 +1184,12 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     }
 
     if (slidePlan.type === "career") {
-      addEyebrow(slide, slidePlan.eyebrow);
-      const careerHeading = fittedText(slidePlan.title, primaryImage ? 17 : 25, 2, primaryImage ? 35 : 38, 31);
-      slide.addText(careerHeading.text, { x: 0.78, y: 1.16, w: primaryImage ? 7.25 : 11.35, h: 0.82, fontSize: careerHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
-      if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      const imageOnLeft = primaryImage && slidePlan.layout === "split_left";
+      const textX = imageOnLeft ? 5.18 : 0.78;
+      addEyebrow(slide, slidePlan.eyebrow, false, textX);
+      const careerHeading = fittedText(slidePlan.title, primaryImage ? 7.25 : 11.35, .92, 2, primaryImage ? 35 : 38, 29);
+      slide.addText(careerHeading.text, { x: textX, y: 1.16, w: primaryImage ? 7.25 : 11.35, h: 0.92, fontSize: careerHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 6);
       const columns = primaryImage || selected.length <= 3 ? 1 : 2;
       const rowsPerColumn = Math.ceil(selected.length / columns);
@@ -1171,19 +1197,19 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         const display = formatCareerFact(item, false);
         const column = Math.floor(index / rowsPerColumn);
         const row = index % rowsPerColumn;
-        const x = 0.82 + column * 6.05;
-        const rowStep = primaryImage ? 0.98 : columns === 2 ? 1.28 : 1.25;
+        const x = textX + 0.04 + column * 6.05;
+        const rowStep = primaryImage ? 1.35 : columns === 2 ? 1.28 : 1.35;
         const y = 2.2 + row * rowStep;
         const hasDate = display.date !== "—";
         const contentX = x + (hasDate ? 1.13 : 0.25);
         const titleW = primaryImage ? (hasDate ? 6.25 : 7.13) : columns === 2 ? (hasDate ? 4.55 : 5.43) : (hasDate ? 10.35 : 11.23);
-        const titleFit = fittedText(display.title, columns === 2 ? 30 : 48, columns === 2 ? 2 : 1, columns === 1 && !primaryImage ? 19 : 17, 16);
-        const metaFit = fittedText(display.meta, columns === 2 ? 40 : 54, 1, columns === 1 && !primaryImage ? 14 : 13, 12);
+        const titleFit = fittedText(display.title, titleW, .58, 2, columns === 1 && !primaryImage ? 19 : 17, 15);
+        const metaFit = fittedText(display.meta, titleW, .25, 1, columns === 1 && !primaryImage ? 14 : 13, 11);
         slide.addShape(pptx.ShapeType.ellipse, { x, y: y + 0.08, w: 0.12, h: 0.12, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 } });
         if (hasDate) slide.addText(oneLineText(display.date, 12), { x: x + 0.25, y, w: 0.85, h: 0.34, fontSize: 16, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });
         slide.addText(oneLineText(item.categoryLabel, 12), { x: contentX, y: y + 0.02, w: 1.05, h: 0.24, fontSize: 11, bold: true, color: hex(p.muted), margin: 0, fit: "shrink" });
-        slide.addText(titleFit.text, { x: contentX, y: y + 0.28, w: titleW, h: columns === 2 ? 0.48 : 0.34, fontSize: titleFit.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-        if (display.meta) slide.addText(metaFit.text, { x: contentX, y: y + (columns === 2 ? 0.8 : 0.64), w: titleW, h: 0.25, fontSize: metaFit.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
+        slide.addText(titleFit.text, { x: contentX, y: y + 0.28, w: titleW, h: 0.58, fontSize: titleFit.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
+        if (display.meta) slide.addText(metaFit.text, { x: contentX, y: y + 0.92, w: titleW, h: 0.25, fontSize: metaFit.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x: contentX, y: y + rowStep - 0.08, w: titleW, h: 0, line: { color: hex(p.muted), transparency: 80, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
@@ -1191,52 +1217,56 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     }
 
     if (slidePlan.type === "contact") {
-      addEyebrow(slide, slidePlan.eyebrow || "섭외 문의");
-      if (primaryImage) addImage(slide, primaryImage, 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      const imageOnLeft = primaryImage && slidePlan.layout === "split_left";
+      const textX = imageOnLeft ? 5.18 : 0.78;
+      addEyebrow(slide, slidePlan.eyebrow || "섭외 문의", false, textX);
+      if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 8.55, 0.65, 4.15, 6.25, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const contactWidth = primaryImage ? 7.15 : 11.4;
-      const contactHeading = fittedText(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", primaryImage ? 18 : 26, 2, primaryImage ? 39 : 44, 34);
-      slide.addText(contactHeading.text, { x: 0.78, y: 1.25, w: contactWidth, h: 1.38, fontSize: contactHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
-      slide.addText(oneLineText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), 52), { x: 0.82, y: 2.85, w: contactWidth, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink" });
+      const contactHeading = fittedText(slidePlan.title || "가능 일정과 출연 조건을 확인해 보세요", contactWidth, 1.38, 2, primaryImage ? 39 : 44, 32);
+      slide.addText(contactHeading.text, { x: textX, y: 1.25, w: contactWidth, h: 1.38, fontSize: contactHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      slide.addText(oneLineText(slidePlan.body || [profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), 52), { x: textX + 0.04, y: 2.85, w: contactWidth, h: 0.5, fontSize: 17, color: hex(p.muted), margin: 0, fit: "shrink" });
       const contactText = profile.contact || slidePlan.bullets.find((item) => !/^https?:\/\//i.test(item)) || "출연 일정 및 조건 문의";
       const videoUrl = normalizeVideoUrl(profile.videoUrl || profile.officialUrl || slidePlan.bullets.find((item) => /^https?:\/\//i.test(item)) || "");
-      slide.addText("문의", { x: 0.82, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
-      slide.addText(oneLineText(contactText, primaryImage ? 42 : 64), { x: 2.25, y: 3.94, w: primaryImage ? 5.65 : 8.45, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
+      slide.addText("문의", { x: textX + 0.04, y: 4.05, w: 1.35, h: 0.25, fontSize: 9, bold: true, charSpacing: 1.5, color: hex(p.accent), margin: 0 });
+      slide.addText(oneLineText(contactText, primaryImage ? 42 : 64), { x: textX + 1.47, y: 3.94, w: primaryImage ? 5.65 : 8.45, h: 0.45, fontSize: 19, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
       if (videoUrl) {
         const videoLabel = isYouTubeVideoUrl(videoUrl) ? "▶  YouTube 대표 영상 바로 보기" : "▶  대표 영상 바로 보기";
-        slide.addText("대표 영상", { x: 0.82, y: 5.14, w: 1.35, h: 0.25, fontSize: 9, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addShape(pptx.ShapeType.roundRect, { x: 2.25, y: 4.88, w: 4.65, h: 0.68, rectRadius: 0.08, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 }, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
-        slide.addText(videoLabel, { x: 2.55, y: 5.08, w: 4.05, h: 0.25, fontSize: 16, bold: true, color: "FFFFFF", margin: 0, align: "center", breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
+        slide.addText("대표 영상", { x: textX + 0.04, y: 5.14, w: 1.35, h: 0.25, fontSize: 9, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addShape(pptx.ShapeType.roundRect, { x: textX + 1.47, y: 4.88, w: 4.65, h: 0.68, rectRadius: 0.08, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 }, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
+        slide.addText(videoLabel, { x: textX + 1.77, y: 5.08, w: 4.05, h: 0.25, fontSize: 16, bold: true, color: "FFFFFF", margin: 0, align: "center", breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
       }
-      slide.addText("행사 일정·장소·예상 관객을 알려주시면 적합한 구성과 출연 조건을 제안드립니다.", { x: 0.82, y: 6.15, w: 7.1, h: 0.36, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
+      slide.addText("행사 일정·장소·예상 관객을 알려주시면 적합한 구성과 출연 조건을 제안드립니다.", { x: textX + 0.04, y: 6.15, w: 7.1, h: 0.36, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
       addFooter(slide, slideIndex + 1);
       return;
     }
 
     if (slidePlan.type === "strengths") {
-      addEyebrow(slide, slidePlan.eyebrow);
-      const strengthHeading = fittedText(slidePlan.title, primaryImage ? 17 : 26, 2, primaryImage ? 35 : 38, 31);
-      slide.addText(strengthHeading.text, { x: 0.78, y: 1.16, w: primaryImage ? 7.2 : 11.4, h: 1.04, fontSize: strengthHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
-      if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
+      const imageOnLeft = primaryImage && slidePlan.layout === "split_left";
+      const textX = imageOnLeft ? 5.18 : 0.78;
+      addEyebrow(slide, slidePlan.eyebrow, false, textX);
+      const strengthHeading = fittedText(slidePlan.title, primaryImage ? 7.2 : 11.4, 1.04, 2, primaryImage ? 35 : 38, 30);
+      slide.addText(strengthHeading.text, { x: textX, y: 1.16, w: primaryImage ? 7.2 : 11.4, h: 1.04, fontSize: strengthHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+      if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
       const bullets = slidePlan.bullets.length ? slidePlan.bullets : profile.generatedStrengths;
       bullets.slice(0, 3).forEach((item, index) => {
         const y = 2.48 + index * 1.25;
-        slide.addText(`0${index + 1}`, { x: 0.82, y, w: 0.55, h: 0.35, fontSize: 15, bold: true, color: hex(p.accent), margin: 0 });
-        slide.addShape(pptx.ShapeType.line, { x: 1.52, y: y + 0.16, w: 0.65, h: 0, line: { color: hex(p.accent), width: 1.2 } });
-        const bulletFit = fittedText(item, primaryImage ? 24 : 40, 2, primaryImage ? 19 : 22, 17);
-        slide.addText(bulletFit.text, { x: 2.42, y: y - 0.15, w: primaryImage ? 5.55 : 8.6, h: 0.78, fontSize: bulletFit.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
+        slide.addText(`0${index + 1}`, { x: textX + 0.04, y, w: 0.55, h: 0.35, fontSize: 15, bold: true, color: hex(p.accent), margin: 0 });
+        slide.addShape(pptx.ShapeType.line, { x: textX + 0.74, y: y + 0.16, w: 0.65, h: 0, line: { color: hex(p.accent), width: 1.2 } });
+        const bulletFit = fittedText(item, primaryImage ? 5.55 : 8.6, .78, 2, primaryImage ? 19 : 22, 16);
+        slide.addText(bulletFit.text, { x: textX + 1.64, y: y - 0.15, w: primaryImage ? 5.55 : 8.6, h: 0.78, fontSize: bulletFit.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       });
-      addEvidence(slide, slidePlan, 0.82, primaryImage ? 7.1 : 11.4);
+      addEvidence(slide, slidePlan, textX + 0.04, primaryImage ? 7.1 : 11.4);
       addFooter(slide, slideIndex + 1);
       return;
     }
 
-    const imageOnLeft = slidePlan.layout === "split_left" || (slidePlan.type === "about" && template.coverImageSide === "left");
+    const imageOnLeft = slidePlan.layout === "split_left";
     if (primaryImage) addImage(slide, primaryImage, imageOnLeft ? 0.42 : 7.55, 0.45, 5.35, 6.6, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
     const hasImageFrame = Boolean(primaryImage);
     const textX = hasImageFrame && imageOnLeft ? 6.55 : 0.78;
     const textW = hasImageFrame ? 5.9 : 11.7;
-    const aboutHeading = fittedText(slidePlan.title, hasImageFrame ? 12 : 20, hasImageFrame ? 2 : 3, hasImageFrame ? 35 : 38, 30);
-    const aboutBody = fittedText(slidePlan.body || compactText(profile.introduction, 105), hasImageFrame ? 32 : 48, 4, 18, 16);
+    const aboutHeading = fittedText(slidePlan.title, textW, 1.5, hasImageFrame ? 2 : 3, hasImageFrame ? 35 : 38, 30);
+    const aboutBody = fittedText(slidePlan.body || compactText(profile.introduction, 105), hasImageFrame ? 5.55 : 8.8, 1.75, 4, 18, 16);
     slide.addText(oneLineText(slidePlan.eyebrow || "ARTIST PROFILE", 28), { x: textX, y: 0.6, w: Math.min(4.8, textW), h: 0.28, fontSize: 10, bold: true, charSpacing: 2.5, color: hex(p.accent), margin: 0, fit: "shrink" });
     slide.addText(aboutHeading.text, { x: textX, y: 1.3, w: textW, h: 1.5, fontSize: aboutHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
     slide.addText(aboutBody.text, { x: textX, y: 3.1, w: hasImageFrame ? 5.55 : 8.8, h: 1.75, fontSize: aboutBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, paraSpaceAfter: 8, fit: "shrink" });
