@@ -788,12 +788,17 @@ export default function ProfileStudio() {
       let workingProfile = profile.primaryField.trim() ? profile : { ...profile, primaryField: "기타" };
       if (workingProfile.templateMode !== "manual") workingProfile = { ...workingProfile, templateMode: "auto", templateKey: recommendTemplateKey(workingProfile) };
       let addedWebImageCount = 0;
+      let generatedImageCount = 0;
       const existingAssets = await prepareVisualAssets(workingProfile);
       const desiredVisualCount = Math.min(8, Math.max(5, workingProfile.pageCount));
       const pdfReference = workingProfile.pdfPageAssets
         .flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected) : [])
         .sort((a, b) => Number(b.role === "portrait") - Number(a.role === "portrait") || Number(b.role === "stage") - Number(a.role === "stage") || Number(b.kind === "photo") - Number(a.kind === "photo"))[0]?.dataUrl;
+      const pdfPortraitReference = workingProfile.pdfPageAssets
+        .flatMap((page) => page.selected ? (page.extractedVisuals ?? []).filter((visual) => visual.selected && visual.role === "portrait" && visual.kind === "photo") : [])
+        .sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0))[0]?.dataUrl;
       const referenceImageSource = workingProfile.representativeImage || workingProfile.performanceImages.find(Boolean) || pdfReference;
+      const identityReferenceSource = workingProfile.representativeImage || pdfPortraitReference;
       if (workingProfile.artistName.trim() && referenceImageSource && existingAssets.length < desiredVisualCount) {
         try {
           const referenceImage = await makeImageThumbnail(referenceImageSource, 768);
@@ -828,10 +833,38 @@ export default function ProfileStudio() {
           // 문구 보완이 실패해도 현재 자료로 PPT 초안을 계속 만듭니다.
         }
       }
+      const assetsAfterSearch = await prepareVisualAssets(workingProfile);
+      const missingVisualCount = Math.min(3, Math.max(0, desiredVisualCount - assetsAfterSearch.length));
+      if (workingProfile.artistName.trim() && identityReferenceSource && missingVisualCount > 0) {
+        try {
+          const careerHints = workingProfile.careers
+            .filter((career) => career.title.trim() || career.organization.trim())
+            .map((career) => [career.year, career.title, career.organization].filter(Boolean).join(" · "));
+          const requests = [
+            { id: "auto-stage", purpose: "실제 분야와 의상이 자연스럽게 드러나는 전문적인 가로 활동 장면", aspectRatio: "3:2" as const },
+            { id: "auto-wide", purpose: "확인된 활동 분야를 이해할 수 있는 넓은 무대 전경", aspectRatio: "16:9" as const },
+            { id: "auto-detail", purpose: "연주·작품·의상과 현장 분위기를 보여주는 정교한 디테일 장면", aspectRatio: "3:2" as const },
+          ].slice(0, missingVisualCount).map((item, index) => ({ ...item, careerHint: careerHints[index % Math.max(1, careerHints.length)] || "" }));
+          const referenceImage = await makeImageThumbnail(identityReferenceSource, 768);
+          const response = await fetch("/api/ai/generate-profile-images", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ artistName: workingProfile.artistName, primaryField: workingProfile.primaryField, region: workingProfile.region, affiliation: workingProfile.affiliation, activeSince: workingProfile.activeSince, identityHint: workingProfile.identityHint, officialUrl: workingProfile.officialUrl, introduction: workingProfile.introduction, referenceImage, careers: workingProfile.careers, requests }),
+          });
+          const result = await response.json() as { images?: GeneratedProfileImage[] };
+          if (response.ok && result.images?.length) {
+            const additions: ExternalImageAsset[] = result.images.map((image) => ({ id: crypto.randomUUID(), dataUrl: image.dataUrl, source: "ai", title: image.title, relevanceScore: 1, qualityScore: .9, visualRole: "other", disclosure: image.disclosure, promptBasis: image.promptBasis, usageStatus: "approved" }));
+            workingProfile = { ...workingProfile, externalImages: [...workingProfile.externalImages, ...additions].slice(0, FILE_LIMITS.maxPerformanceImages) };
+            generatedImageCount = additions.length;
+          }
+        } catch {
+          // 무료 이미지 생성 한도나 모델 제한이 있어도 기존 실제 자료로 품질 평가를 계속합니다.
+        }
+      }
       const prepared = await prepareDeckPlan(workingProfile);
       setProfile({ ...workingProfile, deckPlan: prepared.plan, deckPlanMeta: prepared.meta });
       setNotice(prepared.meta.mode === "ai"
-        ? `${prepared.meta.provider} · ${prepared.meta.model}${prepared.meta.promptVersion ? ` · 기획 규칙 ${prepared.meta.promptVersion}` : ""} 사용 · 자료량에 맞춰 ${prepared.plan.slides.length}페이지를 구성했어요.${addedWebImageCount ? ` 검수된 웹 사진 ${addedWebImageCount}장 자동 추가 ·` : ""}${prepared.meta.visualReviewIterations ? ` Gemini 시각 출고검사 ${prepared.meta.visualReviewIterations}회 · ${prepared.meta.visualQualityScore ?? 0}점 ·` : ""} 최종 품질 ${prepared.meta.qualityScore ?? 0}점 · 목적별 경력 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영 · 사진 반복과 텍스트 이탈 금지 적용.${prepared.meta.warning ? ` ${prepared.meta.warning}` : ""}`
+        ? `${prepared.meta.provider} · ${prepared.meta.model}${prepared.meta.promptVersion ? ` · 기획 규칙 ${prepared.meta.promptVersion}` : ""} 사용 · 자료량에 맞춰 ${prepared.plan.slides.length}페이지를 구성했어요.${addedWebImageCount ? ` 검수된 웹 사진 ${addedWebImageCount}장 자동 추가 ·` : ""}${generatedImageCount ? ` AI 연출 이미지 ${generatedImageCount}장 자동 보충 ·` : ""}${prepared.meta.visualReviewIterations ? ` Gemini 시각 출고검사 ${prepared.meta.visualReviewIterations}회 · ${prepared.meta.visualQualityScore ?? 0}점 ·` : ""} 최종 품질 ${prepared.meta.qualityScore ?? 0}점 · 목적별 경력 ${prepared.meta.coveredFactCount ?? 0}/${prepared.meta.totalFactCount ?? 0}개 반영 · 사진 반복과 텍스트 이탈 금지 적용.${prepared.meta.warning ? ` ${prepared.meta.warning}` : ""}`
         : `${prepared.meta.warning || "Gemini 기획을 완료하지 못했습니다."} 기본 페이지 구성으로 미리보기를 만들었어요. (오류 코드: ${prepared.meta.errorCode || "DECK_PLANNING_FAILED"})`);
       setStep(2);
     } catch {
@@ -1254,9 +1287,10 @@ function PreviewStep({ profile, template, busy, notice, onEdit, onRetry, onDownl
   const visibleSlides = slides.length ? slides : [<div className="ai-preview-slide ai-cover" key="empty"><div className="ai-slide-copy"><span>ARTIST PROFILE</span><h1>{profile.artistName}</h1><p>{profile.tagline}</p></div></div>];
   const activePlan = plans[slide];
   const isAiPlan = profile.deckPlanMeta?.mode === "ai";
-  const qualityChecks = profile.deckPlanMeta?.qualityChecks ?? [];
-  return <section className="preview-page"><div className="preview-top"><div><span>05 · 완성</span><h1>{isAiPlan ? "Gemini가 구성한 섭외 제안서입니다" : "섭외 목적에 맞춘 제안서입니다"}</h1><p>담당자가 무대 구성과 실제 근거를 확인하고 바로 문의할 수 있는 순서로 구성했습니다.</p></div><div className="preview-actions"><button className="button ghost" onClick={onEdit}><PenLine size={16} /> 내용 수정</button>{!isAiPlan && <button className="button ghost" disabled={busy} onClick={() => void onRetry()}><RotateCcw size={16} /> Gemini 다시 시도</button>}<button className="button primary" disabled={busy} onClick={() => void onDownload()}>{busy ? <Loader2 className="spin" size={17} /> : <Download size={17} />} {busy ? "PPTX 제작 중" : "이 구성으로 PPTX 다운로드"}</button></div></div>
-    {notice && <div className={`notice ${notice.includes("문제가") || notice.includes("기본 구성") ? "warning" : "success"}`}>{notice}</div>}
+  const releaseReady = profile.deckPlanMeta?.releaseReady === true;
+  const qualityChecks = (profile.deckPlanMeta?.qualityChecks ?? []).filter((check) => check.id.startsWith("quality_") || check.id === "visual_review");
+  return <section className="preview-page"><div className="preview-top"><div><span>05 · 완성</span><h1>{releaseReady ? "90점 출고 기준을 통과한 제안서입니다" : isAiPlan ? "출고 기준을 통과하지 못한 항목이 있습니다" : "섭외 목적에 맞춘 제안서입니다"}</h1><p>자료 반영·글자·사진·디자인·설득력이 각각 90점 이상일 때만 PPTX를 다운로드할 수 있습니다.</p></div><div className="preview-actions"><button className="button ghost" onClick={onEdit}><PenLine size={16} /> 내용 수정</button>{(!isAiPlan || !releaseReady) && <button className="button ghost" disabled={busy} onClick={() => void onRetry()}><RotateCcw size={16} /> 90점 재검수</button>}<button className="button primary" disabled={busy || !releaseReady} onClick={() => void onDownload()}>{busy ? <Loader2 className="spin" size={17} /> : <Download size={17} />} {busy ? "PPTX 제작 중" : releaseReady ? "검수 완료 PPTX 다운로드" : "90점 기준 미달"}</button></div></div>
+    {notice && <div className={`notice ${notice.includes("문제가") || notice.includes("기본 구성") || notice.includes("기준 미달") ? "warning" : "success"}`}>{notice}</div>}
     {qualityChecks.length > 0 && <div className="quality-check-grid">{qualityChecks.map((check) => <article className={check.passed ? "passed" : "needs-review"} key={check.id}>{check.passed ? <CheckCircle2 size={17} /> : <CircleHelp size={17} />}<div><strong>{check.label}</strong><small>{check.detail}</small></div></article>)}</div>}
     <div className="preview-workspace"><div className="slide-rail">{visibleSlides.map((item, index) => { const plan = plans[index]; const image = plan?.imageRefs[0] ? getDeckAssetData(profile, plan.imageRefs[0]) : ""; return <button className={slide === index ? "selected" : ""} onClick={() => setSlide(index)} key={index}><span>{index + 1}</span><div style={{ background: image ? `linear-gradient(#0007,#0007),url(${image}) center/cover` : p.background, color: p.text }}>{plan?.title || profile.artistName || "ARTIST"}</div></button>; })}</div><div className="canvas-wrap"><div className={`slide-canvas ai-plan-canvas preview-system-${template.composition}`} style={{ background: slide % 2 ? p.surface : p.background, color: p.text, "--accent": p.accent, "--muted": p.muted, "--heading-font": template.typography.heading, "--body-font": template.typography.body } as React.CSSProperties}>{visibleSlides[slide]}</div>{activePlan?.imagePurpose && <small className="image-purpose">사진 역할 · {activePlan.imagePurpose}</small>}<div className="canvas-controls"><button onClick={() => setSlide(Math.max(0, slide - 1))}><ArrowLeft /></button><span>{slide + 1} / {visibleSlides.length}</span><button onClick={() => setSlide(Math.min(visibleSlides.length - 1, slide + 1))}><ArrowRight /></button></div></div></div>
     <div className="completion-grid"><article><CheckCircle2 /><div><strong>수정 가능한 PPTX</strong><p>텍스트와 도형을 파워포인트에서 직접 편집할 수 있어요.</p></div></article><article><LayoutTemplate /><div><strong>{template.name}</strong><p>{profile.pageCount}페이지 구성에 맞춰 자동 배치됩니다.</p></div></article><article><RotateCcw /><div><strong>초안 자동 저장</strong><p>브라우저에서 언제든 이어서 수정할 수 있어요.</p></div></article></div></section>;

@@ -125,6 +125,19 @@ export interface DeckPlanMeta {
   visualQualityScore?: number;
   visualReviewIterations?: number;
   visualQualityIssues?: string[];
+  qualityMetrics?: DeckQualityMetric[];
+  releaseReady?: boolean;
+}
+
+export type DeckQualityDimensionId = "content" | "typography" | "imagery" | "design" | "persuasion";
+
+export interface DeckQualityMetric {
+  id: DeckQualityDimensionId;
+  label: string;
+  score: number;
+  passed: boolean;
+  detail: string;
+  issues: string[];
 }
 
 export interface DeckQualityCheck {

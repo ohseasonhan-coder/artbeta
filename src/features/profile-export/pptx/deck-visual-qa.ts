@@ -148,7 +148,7 @@ async function renderFrame(slide: DeckSlidePlan, index: number, profile: Profile
     const contentY = Math.max(202, heading.bottom + 26);
     if (slide.type === "career") {
       const facts = buildDeckFacts(profile);
-      const selected = slide.careerIndexes.map((factIndex) => facts[factIndex]).filter(Boolean).slice(0, 8);
+      const selected = slide.careerIndexes.map((factIndex) => facts[factIndex]).filter(Boolean).slice(0, 6);
       const columns = image || selected.length <= 3 ? 1 : 2;
       const rows = Math.ceil(selected.length / columns);
       const columnWidth = textWidth / columns - 16;
@@ -156,15 +156,16 @@ async function renderFrame(slide: DeckSlidePlan, index: number, profile: Profile
         const column = Math.floor(factIndex / rows);
         const row = factIndex % rows;
         const x = textX + column * (columnWidth + 26);
-        const y = contentY + row * (columns === 2 ? 70 : 78);
+        const y = contentY + row * 82;
         const display = formatCareerFact(fact, false);
         context.font = `700 13px "${template.typography.body}"`;
         context.fillStyle = color(palette.accent);
         context.fillText(display.date === "—" ? fact.categoryLabel : display.date, x, y);
-        drawFittedText(context, display.title, { x, y: y + 20, width: columnWidth, maxLines: 2, fontSize: 16, minFontSize: 13, lineHeight: 19, fontFamily: template.typography.body, color: mainColor, weight: 700 });
+        drawFittedText(context, display.title, { x, y: y + 20, width: columnWidth, maxLines: 2, fontSize: 18, minFontSize: 16, lineHeight: 21, fontFamily: template.typography.body, color: mainColor, weight: 700 });
+        if (display.meta) drawFittedText(context, display.meta, { x, y: y + 61, width: columnWidth, maxLines: 1, fontSize: 13, minFontSize: 12, lineHeight: 15, fontFamily: template.typography.body, color: mutedColor });
         context.strokeStyle = color(palette.muted);
         context.globalAlpha = .32;
-        context.beginPath(); context.moveTo(x, y + 63); context.lineTo(x + columnWidth, y + 63); context.stroke(); context.globalAlpha = 1;
+        context.beginPath(); context.moveTo(x, y + 78); context.lineTo(x + columnWidth, y + 78); context.stroke(); context.globalAlpha = 1;
       });
     } else if (["strengths", "program", "team"].includes(slide.type)) {
       if (slide.body) drawFittedText(context, slide.body, { x: textX, y: contentY, width: textWidth, maxLines: 2, fontSize: 17, minFontSize: 14, lineHeight: 22, fontFamily: template.typography.body, color: mutedColor });

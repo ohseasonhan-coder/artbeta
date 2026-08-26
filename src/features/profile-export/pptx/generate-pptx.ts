@@ -1,4 +1,4 @@
-import { DeckPlan, DeckPlanMeta, DeckQualityCheck, DeckSlidePlan, ProfileData, ProfileVisualRole } from "@/types/profile";
+import { DeckPlan, DeckPlanMeta, DeckQualityCheck, DeckQualityDimensionId, DeckQualityMetric, DeckSlidePlan, ProfileData, ProfileVisualRole } from "@/types/profile";
 import { getTemplate } from "@/features/design-templates/registry/templates";
 import { buildDeckFacts, formatCareerFact, rankDeckFactIndexes, type DeckFact } from "./deck-facts";
 import { bookingConditionBullets, hasConfirmedBookingConditions } from "./booking-conditions";
@@ -59,11 +59,14 @@ export interface DeckExportResult {
   qualityIssues?: string[];
   visualQualityScore?: number;
   visualReviewIterations?: number;
+  qualityMetrics?: DeckQualityMetric[];
+  releaseReady?: boolean;
 }
 
 interface DeckVisualReviewResult {
   overallScore: number;
   deckIssues: string[];
+  dimensionScores: Record<DeckQualityDimensionId, number>;
   slides: Array<{
     slideIndex: number;
     score: number;
@@ -233,7 +236,7 @@ function enforceDeckSafety(plan: DeckPlan): DeckPlan {
       usedImages.add(id);
       return true;
     }).slice(0, 1),
-    careerIndexes: [...new Set(slide.careerIndexes)].slice(0, slide.type === "career" ? 8 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0),
+    careerIndexes: [...new Set(slide.careerIndexes)].slice(0, slide.type === "career" ? 6 : slide.type === "strengths" ? 3 : slide.type === "gallery" ? 1 : 0),
   }));
   return { ...plan, slides };
 }
@@ -311,6 +314,78 @@ function auditDeckQuality(plan: DeckPlan, profile: ProfileData, assets: VisualAs
   return { score, checks, issues: checks.filter((check) => !check.passed).map((check) => `${check.label}: ${check.detail}`) };
 }
 
+const qualityDimensionLabels: Record<DeckQualityDimensionId, string> = {
+  content: "자료·경력 반영",
+  typography: "글자·한국어 조판",
+  imagery: "사진 선별·배치",
+  design: "디자인 완성도",
+  persuasion: "담당자 설득력",
+};
+
+function evaluateQualityMetrics(plan: DeckPlan, profile: ProfileData, assets: VisualAsset[], visualScores?: Partial<Record<DeckQualityDimensionId, number>>) {
+  const audit = auditDeckQuality(plan, profile, assets);
+  const checkMap = new Map(audit.checks.map((check) => [check.id, check]));
+  const passRatio = (ids: string[]) => ids.filter((id) => checkMap.get(id)?.passed).length / Math.max(1, ids.length);
+  const facts = buildDeckFacts(profile);
+  const factIndexes = new Set(facts.map((_, index) => index));
+  const coveredIndexes = new Set(plan.slides.filter((slide) => slide.type === "career").flatMap((slide) => slide.careerIndexes).filter((index) => factIndexes.has(index)));
+  const awards = facts.map((fact, index) => fact.category === "award" ? index : -1).filter((index) => index >= 0);
+  const factCoverage = facts.length ? coveredIndexes.size / facts.length : 1;
+  const awardCoverage = awards.length ? awards.filter((index) => coveredIndexes.has(index)).length / awards.length : 1;
+  const requiredOfferTypes = [
+    profile.extractedItems.some((item) => item.type === "repertoire" && item.status !== "excluded") ? "program" : "",
+    profile.extractedItems.some((item) => item.type === "program_configuration" && item.status !== "excluded") ? "team" : "",
+  ].filter(Boolean);
+  const offerCoverage = requiredOfferTypes.length ? requiredOfferTypes.filter((type) => plan.slides.some((slide) => slide.type === type)).length / requiredOfferTypes.length : 1;
+  const requiresBookingConditions = profile.extractedItems.some((item) => ["performance_duration", "cast_size", "equipment", "technical_requirement"].includes(item.type) && item.status !== "excluded");
+  const bookingCoverage = !requiresBookingConditions || hasConfirmedBookingConditions(profile) && plan.slides.some((slide) => slide.type === "strengths") ? 1 : 0;
+  const identityCoverage = [profile.artistName.trim(), profile.primaryField.trim(), profile.purpose.trim(), profile.introduction.trim() || profile.tagline.trim()].filter(Boolean).length / 4;
+
+  const contentDeterministic = Math.round(factCoverage * 45 + awardCoverage * 15 + offerCoverage * 15 + bookingCoverage * 10 + identityCoverage * 15);
+  const typographyDeterministic = Math.round(passRatio(["text", "word_wrap", "korean_typesetting", "final_copy", "source_markers"]) * 100);
+  const imageCheckScore = passRatio(["images", "image_quality", "image_identity", "background_quality", "image_role", "empty_gallery", "gallery_alignment", "gallery_photo"]);
+  const visualPrioritySlides = plan.slides.filter((slide) => ["cover", "about", "strengths", "program", "team", "gallery", "contact"].includes(slide.type));
+  const priorityImageCoverage = visualPrioritySlides.length ? visualPrioritySlides.filter((slide) => slide.imageRefs.length === 1).length / visualPrioritySlides.length : 0;
+  const imageryDeterministic = Math.round(imageCheckScore * 72 + Math.min(1, priorityImageCoverage / .72) * 28);
+  const layouts = new Set(plan.slides.slice(1, -1).map((slide) => slide.layout));
+  const layoutVariety = Math.min(1, layouts.size / Math.min(3, Math.max(1, plan.slides.length - 2)));
+  const designDeterministic = Math.round(passRatio(["structure", "purpose", "gallery_titles", "gallery_copy"]) * 75 + layoutVariety * 25);
+  const videoReady = !normalizeVideoUrl(profile.videoUrl) || plan.slides.some((slide) => slide.type === "contact" && slide.bullets.some((bullet) => normalizeVideoUrl(bullet) === normalizeVideoUrl(profile.videoUrl)));
+  const persuasionDeterministic = Math.round(passRatio(["structure", "offer_completeness", "evidence", "contact", "final_copy"]) * 90 + (videoReady ? 10 : 0));
+  const deterministic: Record<DeckQualityDimensionId, number> = {
+    content: contentDeterministic,
+    typography: typographyDeterministic,
+    imagery: imageryDeterministic,
+    design: designDeterministic,
+    persuasion: persuasionDeterministic,
+  };
+  const visualWeights: Record<DeckQualityDimensionId, number> = { content: .25, typography: .45, imagery: .55, design: .7, persuasion: .55 };
+  const relatedChecks: Record<DeckQualityDimensionId, string[]> = {
+    content: ["offer_completeness", "evidence"],
+    typography: ["text", "word_wrap", "korean_typesetting", "final_copy", "source_markers"],
+    imagery: ["images", "image_quality", "image_identity", "background_quality", "image_role", "empty_gallery", "gallery_alignment", "gallery_photo"],
+    design: ["structure", "purpose", "gallery_titles", "gallery_copy"],
+    persuasion: ["structure", "offer_completeness", "evidence", "contact", "final_copy"],
+  };
+  const metrics = (Object.keys(qualityDimensionLabels) as DeckQualityDimensionId[]).map((id): DeckQualityMetric => {
+    const visualScore = visualScores?.[id];
+    const score = visualScore === undefined ? Math.min(85, deterministic[id]) : Math.round(deterministic[id] * (1 - visualWeights[id]) + visualScore * visualWeights[id]);
+    const issues = relatedChecks[id].filter((checkId) => !checkMap.get(checkId)?.passed).map((checkId) => checkMap.get(checkId)!.detail);
+    if (id === "content" && factCoverage < .9) issues.push(`경력·수상 반영률 ${Math.round(factCoverage * 100)}%`);
+    if (id === "imagery" && priorityImageCoverage < .72) issues.push(`핵심 페이지 사진 반영률 ${Math.round(priorityImageCoverage * 100)}%`);
+    if (visualScore !== undefined && visualScore < 90) issues.push(`Gemini 시각 평가 ${visualScore}점`);
+    return {
+      id,
+      label: qualityDimensionLabels[id],
+      score,
+      passed: score >= 90,
+      detail: `${score}점 · ${score >= 90 ? "출고 기준 통과" : "자동 보정 또는 자료 보완 필요"}`,
+      issues: [...new Set(issues)].slice(0, 5),
+    };
+  });
+  return { ...audit, metrics, releaseReady: metrics.every((metric) => metric.passed), releaseScore: Math.min(...metrics.map((metric) => metric.score)) };
+}
+
 function careerFactVisualWeight(fact?: DeckFact) {
   if (!fact) return 1;
   const display = formatCareerFact(fact, false);
@@ -325,7 +400,7 @@ function splitCareerIndexesForLayout(indexes: number[], facts: DeckFact[]) {
   let currentWeight = 0;
   for (const index of [...new Set(indexes)]) {
     const weight = careerFactVisualWeight(facts[index]);
-    const wouldOverflow = current.length >= 8 || current.length >= 4 && currentWeight + weight > 8.1;
+    const wouldOverflow = current.length >= 6 || current.length >= 3 && currentWeight + weight > 6.35;
     if (current.length && wouldOverflow) {
       pages.push(current);
       current = [];
@@ -659,7 +734,7 @@ function ensureVisualCoverage(plan: DeckPlan, assets: VisualAsset[], profile: Pr
     const careerTextWeight = slide.type === "career"
       ? slide.careerIndexes.reduce((total, factIndex) => total + careerFactVisualWeight(deckFacts[factIndex]), 0)
       : 0;
-    const asset = slide.type === "gallery" ? reservedGalleryAssets.shift() : slide.type === "career" && (slide.careerIndexes.length > 5 || careerTextWeight > 5.2) ? undefined : takeAsset(slide.type);
+    const asset = slide.type === "gallery" ? reservedGalleryAssets.shift() : slide.type === "career" && (slide.careerIndexes.length > 4 || careerTextWeight > 4.65) ? undefined : takeAsset(slide.type);
     slide.imageRefs = asset ? [asset.id] : [];
     if (slide.type === "gallery") slide.careerIndexes = asset ? matchingFactIndexes(asset) : [];
     slide.imagePurpose ||= slide.type === "career" ? "해당 활동과 연결되는 현장 사진" : slide.type === "contact" ? "아티스트를 기억하게 만드는 마무리 사진" : "페이지 메시지를 뒷받침하는 활동 사진";
@@ -782,6 +857,7 @@ async function requestDeckVisualReview(plan: DeckPlan, profile: ProfileData, ass
     castSize: profile.castSize,
     technicalRequirements: profile.technicalRequirements,
     careers: facts.map((fact, index) => ({ index, date: fact.date, title: fact.title, organization: fact.organization, category: fact.category })),
+    visualAssets: assets.map((asset) => ({ id: asset.id, origin: asset.origin, role: asset.visualRole || "other", type: asset.visualType || "photo", width: asset.pixelWidth || 0, height: asset.pixelHeight || 0, qualityScore: asset.qualityScore ?? 0 })),
   };
   const response = await fetch("/api/ai/review-deck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: profileEvidence, plan, frames, iteration }) });
   if (!response.ok) {
@@ -824,17 +900,19 @@ async function runVisualReviewLoop(plan: DeckPlan, profile: ProfileData, assets:
   let iterations = 0;
   let issues: string[] = [];
   let version = "";
+  let dimensionScores: Record<DeckQualityDimensionId, number> = { content: 0, typography: 0, imagery: 0, design: 0, persuasion: 0 };
   for (let iteration = 1; iteration <= 2; iteration += 1) {
     const review = await requestDeckVisualReview(current, profile, assets, iteration);
     iterations = iteration;
     score = review.overallScore;
+    dimensionScores = review.dimensionScores;
     issues = [...new Set([...review.deckIssues, ...review.slides.filter((slide) => slide.score < 90).flatMap((slide) => slide.issues.map((issue) => `${slide.slideIndex + 1}페이지 · ${issue}`))])].slice(0, 12);
     version = review.reviewVersion;
     const revised = applyVisualReview(current, review, assets);
     current = normalizeNarrativeStructure(enforceDeckSafety({ ...revised.plan, slides: paginateSlideCopy(revised.plan.slides, profile).map(fitSlideCopy) }), profile);
-    if (score >= 90 || revised.revisedCount === 0) break;
+    if (score >= 90 && Object.values(dimensionScores).every((value) => value >= 90) || revised.revisedCount === 0) break;
   }
-  return { plan: current, score, iterations, issues, version };
+  return { plan: current, score, iterations, issues, version, dimensionScores };
 }
 
 export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: DeckPlan; meta: DeckPlanMeta }> {
@@ -847,6 +925,7 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
     let visualQualityScore: number | undefined;
     let visualReviewIterations = 0;
     let visualQualityIssues: string[] = [];
+    let visualDimensionScores: Partial<Record<DeckQualityDimensionId, number>> | undefined;
     let reviewVersion = "";
     let reviewWarning = "";
     try {
@@ -855,21 +934,29 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
       visualQualityScore = visualReview.score;
       visualReviewIterations = visualReview.iterations;
       visualQualityIssues = visualReview.issues;
+      visualDimensionScores = visualReview.dimensionScores;
       reviewVersion = visualReview.version;
     } catch (error) {
       reviewWarning = error instanceof Error ? error.message : "시각 검수를 완료하지 못했습니다.";
     }
-    const quality = auditDeckQuality(finalPlan, profile, assets);
-    const visualCheck = { id: "visual_review", label: "AI 시각 출고 검사", passed: visualQualityScore !== undefined && visualQualityScore >= 90, detail: visualQualityScore === undefined ? reviewWarning || "시각 검수를 실행하지 못했습니다." : `${reviewVersion || "visual-director"} · ${visualReviewIterations}회 검수 · ${visualQualityScore}점` };
-    const qualityChecks = [...quality.checks, visualCheck];
-    const qualityScore = visualQualityScore === undefined ? Math.min(85, quality.score) : Math.round(quality.score * .45 + visualQualityScore * .55);
-    const qualityIssues = [...quality.issues, ...visualQualityIssues, ...(visualQualityScore === undefined ? [`AI 시각 출고 검사: ${reviewWarning || "실행하지 못했습니다."}`] : [])];
-    return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, promptVersion: result.promptVersion, warning: reviewWarning || undefined, qualityScore, visualQualityScore, visualReviewIterations, visualQualityIssues, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks, qualityIssues } };
+    const quality = evaluateQualityMetrics(finalPlan, profile, assets, visualDimensionScores);
+    const visualReleaseReady = visualQualityScore !== undefined && visualQualityScore >= 90 && Object.values(visualDimensionScores ?? {}).length === 5 && Object.values(visualDimensionScores ?? {}).every((value) => value >= 90);
+    const releaseReady = quality.releaseReady && visualReleaseReady;
+    const releaseScore = visualQualityScore === undefined ? quality.releaseScore : Math.min(quality.releaseScore, visualQualityScore, ...Object.values(visualDimensionScores ?? {}));
+    const visualCheck = { id: "visual_review", label: "AI 시각 출고 검사", passed: visualReleaseReady, detail: visualQualityScore === undefined ? reviewWarning || "시각 검수를 실행하지 못했습니다." : `${reviewVersion || "visual-director"} · ${visualReviewIterations}회 검수 · ${visualQualityScore}점` };
+    const metricChecks = quality.metrics.map((metric): DeckQualityCheck => ({ id: `quality_${metric.id}`, label: metric.label, passed: metric.passed, detail: metric.detail }));
+    const qualityChecks = [...metricChecks, ...quality.checks, visualCheck];
+    const metricIssues = quality.metrics.filter((metric) => !metric.passed).flatMap((metric) => metric.issues.length ? metric.issues.map((issue) => `${metric.label}: ${issue}`) : [`${metric.label}: ${metric.score}점`]);
+    const qualityIssues = [...new Set([...quality.issues, ...metricIssues, ...visualQualityIssues, ...(visualQualityScore === undefined ? [`AI 시각 출고 검사: ${reviewWarning || "실행하지 못했습니다."}`] : [])])];
+    const failedMetricSummary = quality.metrics.filter((metric) => !metric.passed).map((metric) => `${metric.label} ${metric.score}점`);
+    if (!visualReleaseReady) failedMetricSummary.push(`AI 시각 출고 검사 ${visualQualityScore ?? 0}점`);
+    const releaseWarning = releaseReady ? reviewWarning : `90점 출고 기준 미달 · ${failedMetricSummary.join(" · ")}`;
+    return { plan: finalPlan, meta: { mode: "ai", provider: result.provider, model: result.model, promptVersion: result.promptVersion, warning: releaseWarning || undefined, qualityScore: releaseScore, visualQualityScore, visualReviewIterations, visualQualityIssues, qualityMetrics: quality.metrics, releaseReady, coveredFactCount: result.coveredFactCount, totalFactCount: result.totalFactCount, qualityChecks, qualityIssues } };
   } catch (error) {
     const failure = error as Error & { code?: string };
     const coveredLocalPlan = ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(fallbackPlan(profile, assets), profile), assets, profile), profile), profile);
     const localPlan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredLocalPlan, slides: paginateSlideCopy(coveredLocalPlan.slides, profile).map(fitSlideCopy) }), profile);
-    const quality = auditDeckQuality(localPlan, profile, assets);
+    const quality = evaluateQualityMetrics(localPlan, profile, assets);
     return {
       plan: localPlan,
       meta: {
@@ -878,9 +965,11 @@ export async function prepareDeckPlan(profile: ProfileData): Promise<{ plan: Dec
         model: "로컬",
         warning: failure.message || "Gemini PPT 기획을 완료하지 못했습니다.",
         errorCode: failure.code || "DECK_PLANNING_FAILED",
-        qualityScore: quality.score,
-        qualityChecks: quality.checks,
-        qualityIssues: quality.issues,
+        qualityScore: quality.releaseScore,
+        qualityMetrics: quality.metrics,
+        releaseReady: false,
+        qualityChecks: [...quality.metrics.map((metric): DeckQualityCheck => ({ id: `quality_${metric.id}`, label: metric.label, passed: false, detail: metric.detail })), ...quality.checks],
+        qualityIssues: [...quality.issues, "Gemini 시각 출고검사가 없어 90점 출고 기준을 통과할 수 없습니다."],
       },
     };
   }
@@ -892,8 +981,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
   const template = getTemplate(profile.templateKey);
   const p = template.palette;
   const assets = await prepareVisualAssets(profile);
-  const minimumUsefulSlides = Math.max(8, profile.pageCount - 1);
-  const hasPreparedReviewedPlan = Boolean(profile.deckPlan && profile.deckPlanMeta && profile.deckPlan.slides.length >= minimumUsefulSlides);
+  const hasPreparedReviewedPlan = Boolean(profile.deckPlan && profile.deckPlanMeta && profile.deckPlanMeta.releaseReady !== undefined && (profile.deckPlanMeta.visualReviewIterations ?? 0) > 0);
   const prepared: { plan: DeckPlan; meta: DeckPlanMeta } = hasPreparedReviewedPlan
     ? { plan: profile.deckPlan!, meta: profile.deckPlanMeta! }
     : await prepareDeckPlan(profile);
@@ -902,6 +990,11 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     : ensureCompleteCareerCoverage(ensureEvidenceCoverage(ensureVisualCoverage(synchronizeProposalSlide(prepared.plan, profile), assets, profile), profile), profile);
   const plan = normalizeNarrativeStructure(enforceDeckSafety({ ...coveredPlan, slides: paginateSlideCopy(coveredPlan.slides, profile).map(fitSlideCopy) }), profile);
   const exportMeta = prepared.meta;
+  const failedMetrics = (exportMeta.qualityMetrics ?? []).filter((metric) => metric.score < 90);
+  if (!exportMeta.releaseReady || failedMetrics.length) {
+    const details = failedMetrics.length ? failedMetrics.map((metric) => `${metric.label} ${metric.score}점`).join(" · ") : "Gemini 최종 출고검사 미완료";
+    throw new Error(`90점 출고 기준을 통과하지 못했습니다. ${details}. ‘PPT 구성 자동 완성’을 다시 실행하거나 부족한 사진·자료를 보완해 주세요.`);
+  }
   const deckFacts = buildDeckFacts(profile);
 
   pptx.layout = "LAYOUT_WIDE";
@@ -991,7 +1084,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       }
       addEyebrow(slide, slidePlan.eyebrow, false, copyX);
       const coverTitle = fittedText(slidePlan.title || profile.artistName || "ARTIST", primaryImage ? 14 : 20, 2, primaryImage ? 50 : 54, 38);
-      const coverBody = fittedText(slidePlan.body || profile.tagline, primaryImage ? 23 : 34, 2, 21, 17);
+      const coverBody = fittedText(slidePlan.body || profile.tagline, primaryImage ? 23 : 34, 2, 22, 18);
       slide.addText(coverTitle.text, { x: copyX, y: 1.55, w: copyW, h: 2.1, fontSize: coverTitle.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
       slide.addText(coverBody.text, { x: copyX + 0.04, y: 4.05, w: primaryImage ? 5.65 : 8.2, h: 0.78, fontSize: coverBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
       slide.addShape(pptx.ShapeType.line, { x: copyX + 0.04, y: 5.55, w: primaryImage ? 1.1 : 1.65, h: 0, line: { color: hex(p.accent), width: 3 } });
@@ -1039,7 +1132,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         const x = 0.82 + column * (columnWidth + 0.25);
         const y = 2.9 + row * 1.02;
         slide.addText(String(index + 1).padStart(2, "0"), { x, y, w: 0.42, h: 0.26, fontSize: 10, bold: true, color: hex(p.accent), margin: 0 });
-        const itemFit = fittedText(item, primaryImage ? 24 : 28, 1, 17, 15);
+        const itemFit = fittedText(item, primaryImage ? 24 : 28, 1, 18, 16);
         slide.addText(itemFit.text, { x: x + 0.52, y: y - 0.02, w: columnWidth - 0.52, h: 0.34, fontSize: itemFit.fontSize, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x, y: y + 0.48, w: columnWidth, h: 0, line: { color: hex(p.muted), transparency: 76, width: 0.7 } });
       });
@@ -1059,7 +1152,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       slidePlan.bullets.slice(0, 4).forEach((item, index) => {
         const y = 3.2 + index * 0.78;
         slide.addText(String(index + 1).padStart(2, "0"), { x: copyX + 0.04, y, w: 0.45, h: 0.28, fontSize: 11, bold: true, color: hex(p.accent), margin: 0 });
-        const itemFit = fittedText(item, primaryImage ? 34 : 54, 1, 18, 15);
+        const itemFit = fittedText(item, primaryImage ? 34 : 54, 1, 18, 16);
         slide.addText(itemFit.text, { x: copyX + 0.68, y: y - 0.03, w: copyW - 0.78, h: 0.36, fontSize: itemFit.fontSize, bold: true, color: hex(p.text), margin: 0, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x: copyX + 0.68, y: y + 0.47, w: copyW - 0.82, h: 0, line: { color: hex(p.muted), transparency: 78, width: 0.65 } });
       });
@@ -1072,7 +1165,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
       const careerHeading = fittedText(slidePlan.title, primaryImage ? 17 : 25, 2, primaryImage ? 35 : 38, 31);
       slide.addText(careerHeading.text, { x: 0.78, y: 1.16, w: primaryImage ? 7.25 : 11.35, h: 0.82, fontSize: careerHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
       if (primaryImage) addImage(slide, primaryImage, 8.55, 1.05, 4.15, 5.85, slidePlan.imagePurpose, primaryImage.visualType === "graphic" ? "contain" : "cover");
-      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 8);
+      const selected = (slidePlan.careerIndexes.length ? slidePlan.careerIndexes : deckFacts.map((_, index) => index)).map((index) => deckFacts[index]).filter(Boolean).slice(0, 6);
       const columns = primaryImage || selected.length <= 3 ? 1 : 2;
       const rowsPerColumn = Math.ceil(selected.length / columns);
       selected.forEach((item, index) => {
@@ -1080,18 +1173,18 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         const column = Math.floor(index / rowsPerColumn);
         const row = index % rowsPerColumn;
         const x = 0.82 + column * 6.05;
-        const rowStep = primaryImage ? 0.9 : columns === 2 ? 1.08 : 1.25;
+        const rowStep = primaryImage ? 0.98 : columns === 2 ? 1.28 : 1.25;
         const y = 2.2 + row * rowStep;
         const hasDate = display.date !== "—";
         const contentX = x + (hasDate ? 1.13 : 0.25);
         const titleW = primaryImage ? (hasDate ? 6.25 : 7.13) : columns === 2 ? (hasDate ? 4.55 : 5.43) : (hasDate ? 10.35 : 11.23);
-        const titleFit = fittedText(display.title, columns === 2 ? 30 : 48, columns === 2 ? 2 : 1, columns === 1 && !primaryImage ? 18 : 16, 15);
-        const metaFit = fittedText(display.meta, columns === 2 ? 40 : 54, 1, columns === 1 && !primaryImage ? 12 : 11, 10);
+        const titleFit = fittedText(display.title, columns === 2 ? 30 : 48, columns === 2 ? 2 : 1, columns === 1 && !primaryImage ? 19 : 17, 16);
+        const metaFit = fittedText(display.meta, columns === 2 ? 40 : 54, 1, columns === 1 && !primaryImage ? 14 : 13, 12);
         slide.addShape(pptx.ShapeType.ellipse, { x, y: y + 0.08, w: 0.12, h: 0.12, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 } });
-        if (hasDate) slide.addText(oneLineText(display.date, 12), { x: x + 0.25, y, w: 0.85, h: 0.32, fontSize: 14, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });
-        slide.addText(oneLineText(item.categoryLabel, 12), { x: contentX, y: y + 0.02, w: 1.05, h: 0.22, fontSize: 10, bold: true, color: hex(p.muted), margin: 0, fit: "shrink" });
+        if (hasDate) slide.addText(oneLineText(display.date, 12), { x: x + 0.25, y, w: 0.85, h: 0.34, fontSize: 16, bold: true, color: hex(p.accent), margin: 0, fit: "shrink" });
+        slide.addText(oneLineText(item.categoryLabel, 12), { x: contentX, y: y + 0.02, w: 1.05, h: 0.24, fontSize: 11, bold: true, color: hex(p.muted), margin: 0, fit: "shrink" });
         slide.addText(titleFit.text, { x: contentX, y: y + 0.28, w: titleW, h: columns === 2 ? 0.48 : 0.34, fontSize: titleFit.fontSize, bold: true, color: hex(p.text), margin: 0, breakLine: false, fit: "shrink" });
-        if (display.meta) slide.addText(metaFit.text, { x: contentX, y: y + (columns === 2 ? 0.76 : 0.61), w: titleW, h: 0.21, fontSize: metaFit.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
+        if (display.meta) slide.addText(metaFit.text, { x: contentX, y: y + (columns === 2 ? 0.8 : 0.64), w: titleW, h: 0.25, fontSize: metaFit.fontSize, color: hex(p.muted), margin: 0, breakLine: false, fit: "shrink" });
         slide.addShape(pptx.ShapeType.line, { x: contentX, y: y + rowStep - 0.08, w: titleW, h: 0, line: { color: hex(p.muted), transparency: 80, width: 0.6 } });
       });
       addFooter(slide, slideIndex + 1);
@@ -1115,7 +1208,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
         slide.addShape(pptx.ShapeType.roundRect, { x: 2.25, y: 4.88, w: 4.65, h: 0.68, rectRadius: 0.08, fill: { color: hex(p.accent) }, line: { color: hex(p.accent), transparency: 100 }, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
         slide.addText(videoLabel, { x: 2.55, y: 5.08, w: 4.05, h: 0.25, fontSize: 16, bold: true, color: "FFFFFF", margin: 0, align: "center", breakLine: false, hyperlink: { url: videoUrl, tooltip: "대표 영상 열기" } });
       }
-      slide.addText("행사 일정·장소·예상 관객을 알려주시면 적합한 구성과 출연 조건을 제안드립니다.", { x: 0.82, y: 6.18, w: 7.1, h: 0.3, fontSize: 13, color: hex(p.muted), margin: 0, fit: "shrink" });
+      slide.addText("행사 일정·장소·예상 관객을 알려주시면 적합한 구성과 출연 조건을 제안드립니다.", { x: 0.82, y: 6.15, w: 7.1, h: 0.36, fontSize: 16, color: hex(p.muted), margin: 0, fit: "shrink" });
       addFooter(slide, slideIndex + 1);
       return;
     }
@@ -1144,7 +1237,7 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     const textX = hasImageFrame && imageOnLeft ? 6.55 : 0.78;
     const textW = hasImageFrame ? 5.9 : 11.7;
     const aboutHeading = fittedText(slidePlan.title, hasImageFrame ? 12 : 20, hasImageFrame ? 2 : 3, hasImageFrame ? 35 : 38, 30);
-    const aboutBody = fittedText(slidePlan.body || compactText(profile.introduction, 105), hasImageFrame ? 32 : 48, 4, 17, 15);
+    const aboutBody = fittedText(slidePlan.body || compactText(profile.introduction, 105), hasImageFrame ? 32 : 48, 4, 18, 16);
     slide.addText(oneLineText(slidePlan.eyebrow || "ARTIST PROFILE", 28), { x: textX, y: 0.6, w: Math.min(4.8, textW), h: 0.28, fontSize: 10, bold: true, charSpacing: 2.5, color: hex(p.accent), margin: 0, fit: "shrink" });
     slide.addText(aboutHeading.text, { x: textX, y: 1.3, w: textW, h: 1.5, fontSize: aboutHeading.fontSize, bold: true, color: hex(p.text), margin: 0, valign: "middle", fit: "shrink" });
     slide.addText(aboutBody.text, { x: textX, y: 3.1, w: hasImageFrame ? 5.55 : 8.8, h: 1.75, fontSize: aboutBody.fontSize, color: hex(p.muted), margin: 0, breakLine: false, paraSpaceAfter: 8, fit: "shrink" });
@@ -1174,6 +1267,5 @@ export async function downloadPptx(profile: ProfileData): Promise<DeckExportResu
     await pptx.writeFile({ fileName });
   }
   const quality = auditDeckQuality(plan, profile, assets);
-  const finalQualityScore = exportMeta.visualQualityScore === undefined ? exportMeta.qualityScore ?? quality.score : Math.round(quality.score * .45 + exportMeta.visualQualityScore * .55);
-  return { ...exportMeta, qualityScore: finalQualityScore, qualityIssues: [...new Set([...quality.issues, ...(exportMeta.visualQualityIssues ?? [])])], slideCount: plan.slides.length };
+  return { ...exportMeta, qualityScore: exportMeta.qualityScore, qualityIssues: [...new Set([...quality.issues, ...(exportMeta.qualityIssues ?? []), ...(exportMeta.visualQualityIssues ?? [])])], slideCount: plan.slides.length };
 }

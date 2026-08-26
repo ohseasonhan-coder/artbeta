@@ -24,6 +24,13 @@ const slideReviewSchema = z.object({
 const reviewSchema = z.object({
   overallScore: z.number().int().min(0).max(100),
   deckIssues: z.array(z.string()).max(8),
+  dimensionScores: z.object({
+    content: z.number().int().min(0).max(100),
+    typography: z.number().int().min(0).max(100),
+    imagery: z.number().int().min(0).max(100),
+    design: z.number().int().min(0).max(100),
+    persuasion: z.number().int().min(0).max(100),
+  }),
   slides: z.array(slideReviewSchema),
 });
 
@@ -74,6 +81,14 @@ export async function POST(request: Request) {
 4. 여백, 정렬, 시선 흐름, 제목과 본문의 위계
 5. 같은 구성·문장·사진이 반복되어 템플릿처럼 보이는지
 6. 담당자에게 필요한 가치·근거·선택지·문의 행동이 명확한지
+
+dimensionScores 필수 평가:
+- content: 제공된 프로필 근거·경력·수상·프로그램·섭외 조건이 빠짐없이 정확하게 반영됐는지
+- typography: 모든 글자가 읽히며 잘림·겹침·부자연스러운 한국어 줄바꿈이 없는지
+- imagery: 인물 일치·해상도·크롭·중복·페이지 메시지 적합성이 충분한지
+- design: 장르·제안 목적에 맞는 위계, 여백, 변화, 일관성과 전문성이 있는지
+- persuasion: 담당자가 가치와 근거를 이해하고 프로그램 선택·문의 행동까지 이어갈 수 있는지
+- 다섯 항목 모두 실제 출고 가능한 경우에만 90점 이상을 부여하세요. 평균 점수로 약점을 숨기지 마세요.
 
 수정 절대 규칙:
 - profile과 plan에 없는 사실, 숫자, 경력, 수상, 기관, 공연명을 만들지 마세요.
