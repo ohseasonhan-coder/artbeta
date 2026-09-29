@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./studio.css";
 import { SiteSettingsProvider } from "@/features/site-settings/SiteSettingsProvider";
 
 export const metadata: Metadata = {

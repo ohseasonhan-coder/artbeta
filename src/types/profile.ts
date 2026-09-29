@@ -111,6 +111,7 @@ export interface DeckPlan {
 }
 
 export interface DeckPlanMeta {
+  layoutVersion?: string;
   mode: "ai" | "local";
   provider: string;
   model: string;
@@ -211,7 +212,7 @@ export const initialProfile: ProfileData = {
   impressions: [],
   tone: "전문적이고 명료하게",
   purpose: "공공기관 제안",
-  pageCount: 10,
+  pageCount: 8,
   templateKey: "modern_navy_01",
   templateMode: "auto",
   introduction: "",
