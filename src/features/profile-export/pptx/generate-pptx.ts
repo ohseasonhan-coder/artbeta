@@ -557,8 +557,8 @@ function synchronizeProposalSlide(plan: DeckPlan, profile: ProfileData): DeckPla
         bullets: proposalBullets(profile),
       };
       if (slide.type === "about") return { ...slide, bullets: aboutProofBullets(profile) };
-      if (slide.type === "program") return { ...slide, eyebrow: "공연 프로그램", title: "행사 성격에 맞춰 선택하는 레퍼토리", body: "자료에서 확인된 공연 가능 곡과 작품을 중심으로 구성합니다.", bullets: extractedProfileValues(profile, "repertoire", 6), careerIndexes: [] };
-      if (slide.type === "team") return { ...slide, eyebrow: "출연 구성", title: "공간과 예산에 맞춰 고르는 팀 구성", body: "자료에서 확인된 실제 출연 형태만 제안합니다.", bullets: extractedProfileValues(profile, "program_configuration", 4), careerIndexes: [] };
+      if (slide.type === "program") return { ...slide, eyebrow: "공연 프로그램", title: "행사 성격에 맞춰 선택하는 레퍼토리", body: "", bullets: extractedProfileValues(profile, "repertoire", 6), careerIndexes: [] };
+      if (slide.type === "team") return { ...slide, eyebrow: "출연 구성", title: "공간과 예산에 맞춰 고르는 팀 구성", body: "", bullets: extractedProfileValues(profile, "program_configuration", 4), careerIndexes: [] };
       if (slide.type === "gallery") {
         const copy = galleryFactCopy(slide.careerIndexes.map((index) => facts[index]).find(Boolean));
         return { ...slide, title: copy.title, body: copy.body };
@@ -583,8 +583,8 @@ function fallbackPlan(profile: ProfileData, assets: VisualAsset[]): DeckPlan {
     { type: "about", eyebrow: "아티스트 소개", title: compactText(profile.tagline || `${profile.primaryField}로 만드는 무대`, 32), body: compactText(profile.introduction, 105), bullets: aboutProofBullets(profile), imageRefs: visualAssets[1] ? [visualAssets[1].id] : [], imagePurpose: "작업 또는 연주 중인 자연스러운 가로 사진 · 3:2 권장", careerIndexes: evidenceAt(1), layout: "split_right" },
     { type: "strengths", eyebrow: hasConfirmedBookingConditions(profile) ? "섭외 조건" : "제안 무대", title: compactText(buildDecisionHookTitle(profile), 32), body: "", bullets: proposalBullets(profile), imageRefs: [], imagePurpose: "", careerIndexes: proposalFactIndexes.slice(0, 3), layout: "editorial" },
   ];
-  if (repertoire.length) slides.push({ type: "program", eyebrow: "공연 프로그램", title: "행사 성격에 맞춰 선택하는 레퍼토리", body: "자료에서 확인된 공연 가능 곡과 작품을 중심으로 구성합니다.", bullets: repertoire, imageRefs: [], imagePurpose: "레퍼토리의 장르와 무대 분위기를 보여주는 실제 활동 사진", careerIndexes: [], layout: "split_right" });
-  if (programConfigurations.length) slides.push({ type: "team", eyebrow: "출연 구성", title: "공간과 예산에 맞춰 고르는 팀 구성", body: "자료에서 확인된 실제 출연 형태만 제안합니다.", bullets: programConfigurations, imageRefs: [], imagePurpose: "출연 인원과 팀 구성을 한눈에 보여주는 단체 활동 사진", careerIndexes: [], layout: "split_left" });
+  if (repertoire.length) slides.push({ type: "program", eyebrow: "공연 프로그램", title: "행사 성격에 맞춰 선택하는 레퍼토리", body: "", bullets: repertoire, imageRefs: [], imagePurpose: "레퍼토리의 장르와 무대 분위기를 보여주는 실제 활동 사진", careerIndexes: [], layout: "split_right" });
+  if (programConfigurations.length) slides.push({ type: "team", eyebrow: "출연 구성", title: "공간과 예산에 맞춰 고르는 팀 구성", body: "", bullets: programConfigurations, imageRefs: [], imagePurpose: "출연 인원과 팀 구성을 한눈에 보여주는 단체 활동 사진", careerIndexes: [], layout: "split_left" });
   const offerSlideCount = Number(Boolean(repertoire.length)) + Number(Boolean(programConfigurations.length));
   const desiredCareerPageCount = Math.max(1, Math.min(profile.pageCount >= 12 ? 5 : profile.pageCount >= 10 ? 4 : 2, Math.ceil(proposalFactIndexes.length / 8)));
   const galleryAssets = visualAssets.slice(2, 2 + Math.min(5, Math.max(0, profile.pageCount - 4 - offerSlideCount - desiredCareerPageCount)));

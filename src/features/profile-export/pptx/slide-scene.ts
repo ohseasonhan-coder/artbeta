@@ -6,7 +6,7 @@ import { careerLayout } from "./career-layout";
 
 export const SLIDE_WIDTH = 40 / 3;
 export const SLIDE_HEIGHT = 7.5;
-export const SLIDE_LAYOUT_VERSION = "editorial-scene-v2";
+export const SLIDE_LAYOUT_VERSION = "editorial-scene-v3";
 export interface Frame { x: number; y: number; w: number; h: number }
 export interface SceneAsset {
   id: string; dataUrl: string; pixelWidth?: number; pixelHeight?: number;
@@ -47,7 +47,7 @@ function safeLink(value: string) {
 
 /** One geometry contract shared by PowerPoint, the browser, and visual review. */
 export function buildSlideScene(plan: DeckSlidePlan, index: number, profile: ProfileData, template: DesignTemplate, assets: Map<string, SceneAsset>): SlideScene {
-  const p = template.palette;
+  const p = plan.type === "contact" ? { ...template.palette, background: template.palette.text, surface: template.palette.text, text: template.palette.background, muted: template.palette.background, accent: template.palette.background } : template.palette;
   const scene: SlideScene = { background: index % 2 ? p.surface : p.background, nodes: [], notes: [], warnings: [] };
   const facts = buildDeckFacts(profile);
   const careers = plan.careerIndexes.map(i => facts[i]).filter(Boolean).slice(0, 6);
@@ -80,8 +80,65 @@ export function buildSlideScene(plan: DeckSlidePlan, index: number, profile: Pro
     if (fit.truncated) scene.warnings.push(`문구를 줄이거나 나누어 주세요: ${value}`);
   };
 
-  rect({ x: .55, y: .25, w: template.composition === "dynamic" ? 2.1 : .6, h: .055 }, p.accent);
-  if (template.composition === "human") rect({ x: 0, y: 0, w: .12, h: SLIDE_HEIGHT }, p.accent);
+  const placePhoto = (frame: Frame) => {
+    if (!asset) return;
+    const placement = containImage(frame, asset.pixelWidth!, asset.pixelHeight!);
+    if (placement) scene.nodes.push({ type: "image", ...placement, asset });
+    if (asset.sourceTitle || asset.sourceUrl) scene.notes.push([asset.sourceTitle, asset.sourceUrl].filter(Boolean).join(": "));
+    if (asset.kind === "generated") text("AI 연출 이미지", { x: frame.x, y: 6.78, w: frame.w, h: .2 }, 9, 1, false, p.muted);
+  };
+  const finish = () => {
+    text(profile.artistName, { x: .7, y: 7.08, w: 10.5, h: .22 }, 9, 1, false, p.muted);
+    text(String(index + 1).padStart(2, "0"), { x: 12.1, y: 7.08, w: .5, h: .22 }, 9, 1, true, p.muted);
+    scene.notes.push(...scene.nodes.flatMap(node => node.type === "text" && node.truncated ? [`전체 문구: ${node.original}`] : []));
+    return scene;
+  };
+
+  // A wide photograph gets its own uninterrupted field, not a narrow side column.
+  if (plan.type === "cover" && !asset) {
+    text(plan.eyebrow || "ARTIST PORTFOLIO", { x: .7, y: .65, w: 11.9, h: .25 }, 11, 1, true, p.accent);
+    text(plan.title || profile.artistName, { x: .7, y: 1.65, w: 11.9, h: 2.4 }, 60, 2, true);
+    text(plan.body || profile.tagline, { x: .7, y: 4.55, w: 9.3, h: 1.05 }, 24, 2, false, p.muted);
+    text([profile.primaryField, profile.purpose, profile.region].filter(Boolean).join(" · "), { x: .7, y: 6.25, w: 11.9, h: .45 }, 13, 2, false, p.muted);
+    return finish();
+  }
+  if (plan.type === "cover" && landscape) {
+    text(plan.eyebrow || "ARTIST PORTFOLIO", { x: .7, y: .42, w: 8.2, h: .22 }, 10, 1, true, p.accent);
+    text(plan.title || profile.artistName, { x: .7, y: .95, w: 8.2, h: 1.22 }, 42, 2, true);
+    text(plan.body || profile.tagline, { x: 9.45, y: .95, w: 3.15, h: 1.22 }, 17, 4, false, p.muted);
+    placePhoto({ x: .7, y: 2.42, w: 11.9, h: 4.23 });
+    return finish();
+  }
+
+  // Flat editorial columns separate the proposition from the program and cast.
+  if (["strengths", "program", "team"].includes(plan.type)) {
+    text(plan.eyebrow || "PERFORMANCE", { x: .7, y: .55, w: 8, h: .24 }, 10, 1, true, p.accent);
+    text(plan.title, { x: .7, y: 1.08, w: asset ? 8.1 : 11.9, h: 1.2 }, 34, 2, true);
+    if (asset) placePhoto({ x: 9.3, y: .55, w: 3.3, h: 1.85 });
+    text(plan.body, { x: .7, y: 2.5, w: 11.9, h: .6 }, 17, 2, false, p.muted);
+    const limit = plan.type === "strengths" ? 3 : plan.type === "program" ? 6 : 4;
+    const bullets = (plan.bullets.length ? plan.bullets : profile.generatedStrengths).slice(0, limit);
+    const columns = plan.type === "strengths" ? Math.max(1, bullets.length) : 2;
+    const rows = Math.max(1, Math.ceil(bullets.length / columns));
+    const colW = (11.9 - .55 * (columns - 1)) / columns;
+    bullets.forEach((bullet, i) => {
+      const cx = .7 + (i % columns) * (colW + .55), cy = 3.35 + Math.floor(i / columns) * (3.35 / rows);
+      rect({ x: cx, y: cy, w: colW, h: .012 }, p.muted);
+      if (plan.type === "strengths") {
+        text(String(i + 1).padStart(2, "0"), { x: cx, y: cy + .25, w: colW, h: .8 }, 42, 1, true, p.accent);
+        const separator = bullet.indexOf("·");
+        const label = separator > 0 ? bullet.slice(0, separator).trim() : "";
+        const detail = label ? bullet.slice(separator + 1).trim() : bullet;
+        text(label, { x: cx, y: cy + 1.25, w: colW, h: .4 }, 15, 1, true, p.muted);
+        text(detail, { x: cx, y: cy + 1.88, w: colW, h: 1.35 }, 22, 3, true);
+      } else {
+        text(String(i + 1).padStart(2, "0"), { x: cx, y: cy + .22, w: .45, h: .3 }, 13, 1, true, p.accent);
+        text(bullet, { x: cx + .65, y: cy + .22, w: colW - .65, h: 3.35 / rows - .35 }, 20, rows === 3 ? 2 : 4, true);
+      }
+    });
+    return finish();
+  }
+
   if (photo && asset) {
     const placement = containImage(photo, asset.pixelWidth ?? 0, asset.pixelHeight ?? 0);
     // The browser can discover dimensions after load. Unknown dimensions are never stretched.
@@ -117,20 +174,6 @@ export function buildSlideScene(plan: DeckSlidePlan, index: number, profile: Pro
       text(display.title, { x: cx, y: y + .29, w: colW, h: .57 }, 17, 2, true);
       text(display.meta, { x: cx, y: y + .9, w: colW, h: .22 }, 10, 1, false, p.muted);
       scene.notes.push([display.date, display.title, display.meta, fact.sourceUrl].filter(Boolean).join(" · "));
-    });
-  } else if (["strengths", "program", "team"].includes(plan.type)) {
-    const count = plan.type === "program" ? 6 : plan.type === "team" ? 4 : 3;
-    text(plan.body, { x, y: 2.52, w, h: .58 }, 16, 2, false, p.muted);
-    const top = plan.body ? 3.28 : 2.65;
-    const bullets = (plan.bullets.length ? plan.bullets : profile.generatedStrengths).slice(0, count);
-    const columns = plan.type === "program" ? 2 : 1;
-    const rows = Math.max(1, Math.ceil(bullets.length / columns));
-    const colW = (w - .4 * (columns - 1)) / columns;
-    const rowH = Math.min(1.15, (6.45 - top) / rows);
-    bullets.forEach((bullet, i) => {
-      const cx = x + Math.floor(i / rows) * (colW + .4), y = top + (i % rows) * rowH;
-      text(String(i + 1).padStart(2, "0"), { x: cx, y, w: .35, h: .25 }, 11, 1, true, p.accent);
-      text(bullet, { x: cx + .48, y, w: colW - .48, h: rowH - .18 }, plan.type === "strengths" ? 21 : 17, 3, true);
     });
   } else if (plan.type === "contact") {
     text(plan.body, { x, y: 2.65, w, h: .7 }, 17, 2, false, p.muted);

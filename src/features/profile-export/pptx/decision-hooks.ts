@@ -55,12 +55,12 @@ function factPriority(fact: DecisionHookFact, purpose: string) {
 
 export function buildDecisionHookTitle(profile: DecisionHookProfile) {
   const purpose = text(profile.purpose);
-  if (/공공|기관/.test(purpose)) return "공공 무대 검토에 필요한 근거와 조건";
+  if (/공공|기관/.test(purpose)) return "공공행사 공연 제안";
   if (/기업|브랜드/.test(purpose)) return "행사 목적에 맞춰 선택하는 무대 구성";
   if (/축제|페스티벌/.test(purpose)) return "축제 현장에 맞춘 무대와 운영 조건";
-  if (/공연장|극장/.test(purpose)) return "공연장 검토를 위한 프로그램과 활동 근거";
-  if (/해외|글로벌/.test(purpose)) return "해외 무대 검토를 위한 활동 근거와 구성";
-  return "섭외 판단에 필요한 가치와 근거";
+  if (/공연장|극장/.test(purpose)) return "공연장 프로그램 제안";
+  if (/해외|글로벌/.test(purpose)) return "해외 공연 제안";
+  return "공연 제안";
 }
 
 export function buildDecisionHookBullets(profile: DecisionHookProfile, facts: DecisionHookFact[]) {
@@ -69,7 +69,7 @@ export function buildDecisionHookBullets(profile: DecisionHookProfile, facts: De
   const fit = compact(`제안 적합성 · ${purpose} · ${field}`, 48);
   const strongestFact = [...facts].filter((fact) => text(fact.title)).sort((a, b) => factPriority(a, purpose) - factPriority(b, purpose))[0];
   const proof = strongestFact
-    ? compact(`공식 근거 · ${[text(strongestFact.date), text(strongestFact.title), text(strongestFact.organization)].filter(Boolean).join(" · ")}`, 48)
+    ? compact(`대표 이력 · ${[text(strongestFact.date), text(strongestFact.title), text(strongestFact.organization)].filter(Boolean).join(" · ")}`, 48)
     : "";
   const conditions = [text(profile.performanceDuration), text(profile.castSize), ...stringList(profile.technicalRequirements)].filter(Boolean);
   const configurations = (profile.configurations ?? []).map(text).filter(Boolean);
@@ -89,8 +89,8 @@ export function buildDecisionHookBullets(profile: DecisionHookProfile, facts: De
 export function hasStrongDecisionHooks(title: string, bullets: string[], hasFacts: boolean) {
   const labels = bullets.map((bullet) => bullet.split("·")[0].trim());
   const hasFit = labels.includes("제안 적합성");
-  const hasProof = !hasFacts || labels.includes("공식 근거");
+  const hasProof = !hasFacts || labels.some(label => ["공식 근거", "대표 이력"].includes(label));
   const hasChoice = labels.some((label) => ["운영 조건", "선택 구성", "선택 프로그램", "제안 포인트", "활동 기반"].includes(label));
-  const isBuyerTitle = /검토|선택|섭외|무대|근거|조건|프로그램/.test(title) && !/^(주요 활동|아티스트 소개|대표 사진|프로필)$/i.test(title.trim());
+  const isBuyerTitle = /검토|선택|섭외|무대|근거|조건|프로그램|제안/.test(title) && !/^(주요 활동|아티스트 소개|대표 사진|프로필)$/i.test(title.trim());
   return isBuyerTitle && hasFit && hasProof && hasChoice && bullets.length === 3;
 }

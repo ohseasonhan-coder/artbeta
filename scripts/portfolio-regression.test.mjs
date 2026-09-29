@@ -96,7 +96,7 @@ test("PPTX export preserves all careers and keeps text inside every template's c
         { ...common, type: "contact", title: "섭외 문의" },
       ] },
       // Synthetic approval isolates layout from external AI services in this test only.
-      deckPlanMeta: { layoutVersion: "editorial-scene-v2", mode: "fallback", releaseReady: true, visualReviewIterations: 1, qualityMetrics: [] },
+      deckPlanMeta: { layoutVersion: load(resolve(root, "src/features/profile-export/pptx/slide-scene.ts")).SLIDE_LAYOUT_VERSION, mode: "fallback", releaseReady: true, visualReviewIterations: 1, qualityMetrics: [] },
     };
     const result = await downloadPptx(profile);
     const zip = await JSZip.loadAsync(output);
